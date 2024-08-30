@@ -1497,6 +1497,12 @@ impl Wallet {
                                 .ok_or(Error::PreimageNotProvided)?;
                             proof.add_preimage(preimage.to_string());
                         }
+                        Kind::DLC => {
+                            todo!()
+                        }
+                        Kind::SCT => {
+                            todo!()
+                        }
                     }
                     for pubkey in pubkeys {
                         if let Some(signing) = p2pk_signing_keys.get(&pubkey.x_only_public_key()) {
@@ -1739,6 +1745,9 @@ impl Wallet {
                 ),
                 None => (None, None, None, None),
             },
+            SpendingConditions::DLCConditions { data, conditions } =>{ todo!()}
+
+            SpendingConditions::SCTConditions { data, conditions } => {todo!()}
         };
 
         if refund_keys.is_some() && locktime.is_none() {

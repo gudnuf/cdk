@@ -276,6 +276,16 @@ pub enum SpendingConditions {
         /// Additional Optional Spending [`Conditions`]
         conditions: Option<Conditions>,
     },
+
+    DLCConditions{
+        data: Option<String>,  //What types go here
+        conditions: Option<String>,
+    },
+
+    SCTConditions{
+        data: Option<String>,  // What types go here
+        conditions: Option<String>, 
+    }
 }
 
 impl SpendingConditions {
@@ -302,6 +312,8 @@ impl SpendingConditions {
         match self {
             Self::P2PKConditions { .. } => Kind::P2PK,
             Self::HTLCConditions { .. } => Kind::HTLC,
+            Self::DLCConditions { data, conditions } => todo!(),
+            Self::SCTConditions { data, conditions } => todo!(),
         }
     }
 
@@ -310,6 +322,8 @@ impl SpendingConditions {
         match self {
             Self::P2PKConditions { conditions, .. } => conditions.as_ref().and_then(|c| c.num_sigs),
             Self::HTLCConditions { conditions, .. } => conditions.as_ref().and_then(|c| c.num_sigs),
+            Self::DLCConditions { data, conditions } => todo!(),
+            Self::SCTConditions { data, conditions } => todo!(),
         }
     }
 
@@ -325,6 +339,8 @@ impl SpendingConditions {
                 Some(pubkeys)
             }
             Self::HTLCConditions { conditions, .. } => conditions.clone().and_then(|c| c.pubkeys),
+            Self::DLCConditions { data, conditions } => todo!(),
+            Self::SCTConditions { data, conditions } => todo!(),
         }
     }
 
@@ -333,6 +349,8 @@ impl SpendingConditions {
         match self {
             Self::P2PKConditions { conditions, .. } => conditions.as_ref().and_then(|c| c.locktime),
             Self::HTLCConditions { conditions, .. } => conditions.as_ref().and_then(|c| c.locktime),
+            Self::DLCConditions { data, conditions } => todo!(),
+            Self::SCTConditions { data, conditions } => todo!(),
         }
     }
 
@@ -345,6 +363,9 @@ impl SpendingConditions {
             Self::HTLCConditions { conditions, .. } => {
                 conditions.clone().and_then(|c| c.refund_keys)
             }
+        
+            Self::DLCConditions { data, conditions } => todo!(),
+            Self::SCTConditions { data, conditions } => todo!(),
         }
     }
 }
@@ -371,6 +392,8 @@ impl TryFrom<Nut10Secret> for SpendingConditions {
                     .map_err(|_| Error::InvalidHash)?,
                 conditions: secret.secret_data.tags.and_then(|t| t.try_into().ok()),
             }),
+            Kind::DLC => todo!(),
+            Kind::SCT => todo!(),
         }
     }
 }
@@ -384,6 +407,8 @@ impl From<SpendingConditions> for super::nut10::Secret {
             SpendingConditions::HTLCConditions { data, conditions } => {
                 super::nut10::Secret::new(Kind::HTLC, data.to_string(), conditions)
             }
+            SpendingConditions::DLCConditions { data, conditions } => todo!(),
+            SpendingConditions::SCTConditions { data, conditions } => todo!(),
         }
     }
 }
