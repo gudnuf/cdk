@@ -1,7 +1,7 @@
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
 
-use super::{nut00::token::TokenV3Token, nut01::PublicKey, Proofs};
+use super::{nut00::token::TokenV3Token, nut01::PublicKey, nutsct::merkle_root, Proofs};
 use crate::Amount;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;

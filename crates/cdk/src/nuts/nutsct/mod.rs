@@ -34,5 +34,10 @@ pub fn merkle_root(leaf_hashes: &[&[u8; 32]]) -> [u8; 32] {
 
 // see https://github.com/cashubtc/nuts/blob/a86a4e8ce0b9a76ce9b242d6c2c2ab846b3e1955/sct.md#merkle_verifyroot-bytes-leaf_hash-bytes-proof-listbytes---bool
 pub fn merkle_verify(root: &[u8; 32], leaf_hash: &[u8; 32], proof: &[&[u8; 32]]) -> bool {
-    todo!()
+    let h = leaf_hash;
+    for branch_hash in proof{
+        let h = sorted_merkle_hash(h, *branch_hash);
+    };
+
+    return h == root;
 }
