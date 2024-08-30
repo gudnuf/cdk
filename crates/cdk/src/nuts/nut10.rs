@@ -16,6 +16,10 @@ pub enum Kind {
     P2PK,
     /// NUT-14 HTLC
     HTLC,
+    /// NUT-dlc
+    DLC,
+    /// NUT-SCT
+    SCT,
 }
 
 /// Secert Date
