@@ -21,13 +21,30 @@ pub fn oracle_announcement_from_str(str: &str) -> OracleAnnouncement {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
+    use cdk::secp256k1::schnorr::Signature;
+    use dlc_messages::oracle_msgs::EventDescriptor;
 
     const ANNOUNCEMENT: &str = "ypyyyX6pdZUM+OovHftxK9StImd8F7nxmr/eTeyR/5koOVVe/EaNw1MAeJm8LKDV1w74Fr+UJ+83bVP3ynNmjwKbtJr9eP5ie2Exmeod7kw4uNsuXcw6tqJF1FXH3fTF/dgiOwAByEOAEd95715DKrSLVdN/7cGtOlSRTQ0/LsW/p3BiVOdlpccA/dgGDAACBDEyMzQENDU2NwR0ZXN0";
 
     #[test]
     fn test_decode_oracle_announcement() {
         let announcement = oracle_announcement_from_str(ANNOUNCEMENT);
-        println!("{:?}", announcement);
+
+        assert_eq!(
+            announcement.announcement_signature,
+            Signature::from_str(&String::from("ca9cb2c97ea975950cf8ea2f1dfb712bd4ad22677c17b9f19abfde4dec91ff992839555efc468dc353007899bc2ca0d5d70ef816bf9427ef376d53f7ca73668f")).unwrap()
+        );
+
+        let descriptor = announcement.oracle_event.event_descriptor;
+
+        match descriptor {
+            EventDescriptor::EnumEvent(e) => {
+                assert_eq!(e.outcomes.len(), 2);
+            }
+            EventDescriptor::DigitDecompositionEvent(e) => unreachable!(),
+        }
     }
 }

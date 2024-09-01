@@ -45,3 +45,25 @@ pub async fn lookup_announcement_event(
     }
     Some(Ok(events.first().unwrap().clone()))
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nostr_sdk::{Client, EventId, Keys};
+
+    #[tokio::test]
+    async fn test_lookup_announcement_event() {
+        let announemtent_id =
+            EventId::from_hex("d30e6c857a900ebefbf7dc3b678ead9215f4345476067e146ded973971286529")
+                .unwrap();
+
+        let client = Client::new(&Keys::generate());
+        let relay = "wss://relay.damus.io";
+        client.add_relay(relay.to_string()).await.unwrap();
+        client.connect().await;
+        let event = lookup_announcement_event(announemtent_id, &client)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.id, announemtent_id);
+    }
+}
