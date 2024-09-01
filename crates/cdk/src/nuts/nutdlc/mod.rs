@@ -1,8 +1,11 @@
+use std::{collections::HashMap, str::FromStr};
+
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
 
 use super::{nut00::token::TokenV3Token, nut01::PublicKey, nutsct::merkle_root, Proofs};
 use crate::Amount;
+use bitcoin::key::XOnlyPublicKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
@@ -19,19 +22,19 @@ pub struct DLCWitness {
 }
 
 // Ti == SHA256(Ki_ || Pi)
-struct DLCLeaf {
-    blinded_locking_point: PublicKey, // TODO: is this the right type to use?
-    payout: String,                   // JSON-encoded payout structure
+pub struct DLCLeaf {
+    pub blinded_locking_point: PublicKey, // TODO: is this the right type to use?
+    pub payout: PayoutStructure,          // JSON-encoded payout structure
 }
 
 impl DLCLeaf {
-    fn hash(&self) -> String {
+    pub fn hash(&self) -> String {
         // Convert blinded_locking_point to bytes
         let point_bytes = self.blinded_locking_point.to_bytes().to_vec();
 
         // Concatenate point_bytes and payout string
         let mut input = point_bytes;
-        input.extend_from_slice(self.payout.as_bytes());
+        input.extend(self.payout.as_bytes());
 
         // Compute SHA256 hash
         let hash: [u8; 32] = Sha256Hash::hash(&input).to_byte_array();
@@ -95,6 +98,26 @@ struct DLC {
 /// see https://github.com/cashubtc/nuts/blob/a86a4e8ce0b9a76ce9b242d6c2c2ab846b3e1955/dlc.md#mint-registration
 struct PostDlcRegistrationRequest {
     registrations: Vec<DLC>,
+}
+
+pub struct PayoutStructure(HashMap<XOnlyPublicKey, u64>);
+
+impl PayoutStructure {
+    /// Create new [`PayoutStructure`] with a single payout
+    pub fn default(pubkey: String) -> Self {
+        let pubkey = XOnlyPublicKey::from_str(&pubkey).unwrap();
+        Self(HashMap::from([(pubkey, 1)]))
+    }
+
+    /// Convert the PayoutStructure to a byte representation
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (pubkey, amount) in self.0.iter() {
+            bytes.extend_from_slice(&pubkey.serialize());
+            bytes.extend_from_slice(&amount.to_le_bytes());
+        }
+        bytes
+    }
 }
 
 // Known Parameters

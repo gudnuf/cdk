@@ -1,9 +1,9 @@
 use std::vec;
 
+use crate::sub_commands::dlc::UserBet;
 use nostr_sdk::event::builder::Error;
 use nostr_sdk::nips::nip04;
 use nostr_sdk::{base64, Client, Event, EventBuilder, EventId, Filter, Keys, Kind, PublicKey, Tag};
-
 /// Create Kind 8_888 event tagged with the counterparty pubkey
 ///
 /// see https://github.com/nostr-protocol/nips/blob/9157321a224bca77b3472a19de72885af9d6a91d/88.md#kind8_888
@@ -45,6 +45,38 @@ pub async fn lookup_announcement_event(
     }
     Some(Ok(events.first().unwrap().clone()))
 }
+
+pub async fn list_dlc_offers(keys: &Keys, client: &Client) -> Option<Vec<UserBet>> {
+    let filter = Filter::new()
+        .kind(Kind::Custom(8888))
+        .pubkey(keys.public_key());
+    let events = client
+        .get_events_of(vec![filter], None)
+        .await
+        .expect("get_events_of failed");
+
+    if events.is_empty() {
+        return None;
+    }
+
+    let offers = events
+        .iter()
+        .map(|e| {
+            let decrypted = nostr_sdk::nips::nip04::decrypt(
+                keys.secret_key().unwrap(),
+                &e.pubkey,
+                e.content.clone(),
+            )
+            .unwrap();
+
+            let decoded = base64::decode(&decrypted).unwrap();
+            let decoded_str = std::str::from_utf8(&decoded).unwrap();
+            serde_json::from_str::<UserBet>(decoded_str).unwrap()
+        })
+        .collect();
+    Some(offers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
