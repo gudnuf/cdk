@@ -3,7 +3,9 @@ use core::panic;
 use anyhow::{Error, Result};
 use clap::{Args, Subcommand};
 use dlc_messages::oracle_msgs::{EventDescriptor, OracleAnnouncement};
-use nostr_sdk::{Client, EventId, Keys, PublicKey};
+use nostr_sdk::{bitcoin::{PrivateKey, XOnlyPublicKey}, secp256k1::{Secp256k1, SecretKey}, Client, EventId, Keys, PublicKey};
+
+use bitcoin::secp256k1::KeyPair;
 
 pub mod nostr_events;
 pub mod utils;
@@ -17,7 +19,7 @@ pub struct DLCSubCommand {
 }
 
 pub struct PayoutStructure{
-    public_payout_hash: PublicKey,
+    public_payout_hash: [u8; 32], //paper says payout hash, nut says xonly_pubkey
     weight: u8,
 
 }
@@ -38,7 +40,7 @@ pub enum DLCCommands {
 // I imagine this is what will be sent back and forth in the kind 8888 messages
 pub struct UserBet {
     pub id: i32,
-    pub oracle_announcement: String,
+    pub oracle_announcement: OracleAnnouncement,
     oracle_event_id: String,
     user_outcomes: Vec<String>,
     // blinding factor used to create blinded outcome locking points
@@ -47,12 +49,37 @@ pub struct UserBet {
 
     // Timeout branch??
 
-    pub blinding_factor: u128, 
+    pub blinding_factor: KeyPair, 
     pub payout_strucures: Vec<PayoutStructure>,
     pub merkle_root_hash: [u8; 32],
     pub ecash_note: u32,  //Option( vec!(ecash notes))  I dont know the struct for an ecash note
 
+    pub timeout: u32,
+}
 
+impl UserBet {
+    pub async fn locking_points(&self) -> Vec<XOnlyPublicKey> {
+        // oracle announcment.nonce + blinding_factor * G
+        let mut locking_points: Vec<XOnlyPublicKey> = Vec::new();
+        let oracle_public_key = self.oracle_announcement.oracle_public_key;
+
+        let nonce = self.oracle_announcement.oracle_event.oracle_nonces[0];
+
+        match &self.oracle_announcement.oracle_event.event_descriptor {
+            EventDescriptor::EnumEvent(event) => {
+                for outcome in &event.outcomes{
+                    let message = outcome;
+                    // let sG = R - h(m, R)A
+                    // let sG = Nonce point - sha256(message || nonce) * OraclePubKey
+                    // lockingpoints.push(sG)
+                    // s is what the oracle posts in the attestation message so user can spend coins
+                }
+            },
+            EventDescriptor::DigitDecompositionEvent(_) => todo!(),
+        }
+        locking_points
+        
+    }
 }
 
 /// To manage DLC contracts (ie. creating and accepting bets)
