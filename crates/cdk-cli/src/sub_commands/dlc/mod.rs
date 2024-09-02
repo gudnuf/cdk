@@ -16,6 +16,12 @@ pub struct DLCSubCommand {
     pub command: DLCCommands,
 }
 
+pub struct PayoutStructure{
+    public_payout_hash: PublicKey,
+    weight: u8,
+
+}
+
 #[derive(Subcommand)]
 pub enum DLCCommands {
     CreateBet {
@@ -38,6 +44,15 @@ pub struct UserBet {
     // blinding factor used to create blinded outcome locking points
     // user_a dlc funding proofs
     // What other data needs to be passed around to create the contract?
+
+    // Timeout branch??
+
+    pub blinding_factor: u128, 
+    pub payout_strucures: Vec<PayoutStructure>,
+    pub merkle_root_hash: [u8; 32],
+    pub ecash_note: u32,  //Option( vec!(ecash notes))  I dont know the struct for an ecash note
+
+
 }
 
 /// To manage DLC contracts (ie. creating and accepting bets)
