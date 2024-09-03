@@ -42,10 +42,27 @@ impl DLCLeaf {
 }
 
 // Tt = SHA256(hash_to_curve(t.to_bytes(8, 'big')) || Pt)
-struct DLCTimeoutLeaf {
-    timeout: u64, // Unix timestamp
-    // TODO: is there a JSON type I should use?
-    payout: String, // JSON-encoded timeout payout structure
+pub struct DLCTimeoutLeaf {
+    timeout_hash: PublicKey,
+    payout: PayoutStructure,
+}
+
+impl DLCTimeoutLeaf {
+    pub fn new(timeout: &u64, payout: &PayoutStructure) -> Self {
+        let timeout_hash = crate::dhke::hash_to_curve(&timeout.to_be_bytes())
+            .expect("error calculating timeout hash");
+
+        Self {
+            timeout_hash,
+            payout: payout.clone(),
+        }
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        let mut input = self.timeout_hash.to_bytes().to_vec();
+        input.extend(self.payout.as_bytes());
+        Sha256Hash::hash(&input).to_byte_array()
+    }
 }
 
 struct DLCRoot(String);
@@ -105,6 +122,15 @@ impl PayoutStructure {
     pub fn default(pubkey: String) -> Self {
         let pubkey = XOnlyPublicKey::from_str(&pubkey).unwrap();
         Self(HashMap::from([(pubkey, 1)]))
+    }
+
+    pub fn default_timeout(pubkeys: Vec<String>) -> Self {
+        let mut payout = HashMap::new();
+        for pubkey in pubkeys {
+            let pubkey = XOnlyPublicKey::from_str(&pubkey).unwrap();
+            payout.insert(pubkey, 1);
+        }
+        Self(payout)
     }
 
     /// Convert the PayoutStructure to a byte representation
