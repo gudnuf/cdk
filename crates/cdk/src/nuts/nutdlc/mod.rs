@@ -28,7 +28,7 @@ pub struct DLCLeaf {
 }
 
 impl DLCLeaf {
-    pub fn hash(&self) -> String {
+    pub fn hash(&self) -> [u8; 32] {
         // Convert blinded_locking_point to bytes
         let point_bytes = self.blinded_locking_point.to_bytes().to_vec();
 
@@ -37,10 +37,7 @@ impl DLCLeaf {
         input.extend(self.payout.as_bytes());
 
         // Compute SHA256 hash
-        let hash: [u8; 32] = Sha256Hash::hash(&input).to_byte_array();
-
-        // Convert to hexadecimal string
-        crate::util::hex::encode(hash)
+        Sha256Hash::hash(&input).to_byte_array()
     }
 }
 
@@ -100,6 +97,7 @@ struct PostDlcRegistrationRequest {
     registrations: Vec<DLC>,
 }
 
+#[derive(Clone)]
 pub struct PayoutStructure(HashMap<XOnlyPublicKey, u64>);
 
 impl PayoutStructure {

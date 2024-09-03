@@ -57,10 +57,9 @@ pub enum DLCCommands {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UserBet {
     pub id: i32,
-    pub oracle_announcement: String,
+    pub oracle_announcement: OracleAnnouncement,
     oracle_event_id: String,
     user_outcomes: Vec<String>,
-    sigs: HashMap<String, EncryptedSignature>,
     blinding_factor: String,
     dlc_root: String,
     // user_a dlc funding proofs
@@ -186,30 +185,31 @@ impl DLC {
             .collect::<Result<_, Error>>()?;
 
         // create leaf hashes for each outcome
-        let leaf_hashes = blinded_adaptor_points
+        let leaf_hashes: Vec<[u8; 32]> = blinded_adaptor_points
             .iter()
             .map(|(outcome, point)| {
-                if outcomes.contains(outcome) {
+                let leaf = if outcomes.contains(outcome) {
                     // we win
                     DLCLeaf {
-                        blinded_locking_point: point.clone(),
+                        blinded_locking_point: cdk::nuts::PublicKey::from_slice(&point.serialize())
+                            .expect("valid public key"),
                         payout: winning_payout_structure.clone(),
                     }
-                    .hash()
                 } else {
                     // they win
                     DLCLeaf {
-                        blinded_locking_point: point.clone(),
+                        blinded_locking_point: cdk::nuts::PublicKey::from_slice(&point.serialize())
+                            .expect("valid public key"),
                         payout: winning_counterparty_payout_structure.clone(),
                     }
-                    .hash()
-                }
+                };
+                leaf.hash()
             })
-            .collect::<&[&[u8; 32]]>();
+            .collect();
 
         // TODO: Timeoute leaf
 
-        let merkle_root = nuts::nutsct::merkle_root(leaf_hashes);
+        let merkle_root = nuts::nutsct::merkle_root(&leaf_hashes);
 
         // TODO: not sure this is what we want to do here
         let sigs: HashMap<String, EncryptedSignature> = blinded_adaptor_points
@@ -223,10 +223,9 @@ impl DLC {
 
         let offer_dlc = UserBet {
             id: 0, // TODO,
-            oracle_announcement: announcement.encode().to_hex_string(Case::Lower),
+            oracle_announcement: announcement.clone(),
             oracle_event_id: announcement_id.to_string(),
             user_outcomes: outcomes,
-            sigs,
             blinding_factor: blinding_factor.to_be_bytes().to_hex_string(Case::Lower),
             dlc_root: merkle_root.to_hex_string(Case::Lower),
         };
