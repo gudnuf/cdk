@@ -77,6 +77,29 @@ pub async fn list_dlc_offers(keys: &Keys, client: &Client) -> Option<Vec<UserBet
     Some(offers)
 }
 
+// Used to reset the state of our offers on the relays in case we change types of UserBet
+pub async fn delete_all_dlc_offers(keys: &Keys, client: &Client) -> Option<Vec<EventId>> {
+    let filter = Filter::new()
+        .kind(Kind::Custom(8888))
+        .author(keys.public_key());
+    let events = client
+        .get_events_of(vec![filter], None)
+        .await
+        .expect("get_events_of failed");
+
+    if events.is_empty() {
+        return None;
+    }
+
+    let mut deleted: Vec<EventId> = Vec::new();
+
+    for event in events {
+        let id = client.delete_event(event.id).await.unwrap();
+        deleted.push(id);
+    }
+    Some(deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

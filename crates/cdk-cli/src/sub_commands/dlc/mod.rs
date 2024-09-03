@@ -47,6 +47,9 @@ pub enum DLCCommands {
     },
     ListOffers {
         key: String,
+    },
+    DeleteOffers {
+        key: String,
     }, // AcceptBet {
        //     // the event id of the offered bet
        //     event_id: String,
@@ -301,6 +304,15 @@ pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
             let dlc = DLC::new(keys.secret_key()?).await?;
 
             let bets = nostr_events::list_dlc_offers(&keys, &dlc.nostr).await;
+
+            println!("{:?}", bets);
+        }
+        DLCCommands::DeleteOffers { key } => {
+            let keys = Keys::parse(key).unwrap();
+
+            let dlc = DLC::new(keys.secret_key()?).await?;
+
+            let bets = nostr_events::delete_all_dlc_offers(&keys, &dlc.nostr).await;
 
             println!("{:?}", bets);
         }
