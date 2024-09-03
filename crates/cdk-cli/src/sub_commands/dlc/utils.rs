@@ -1,6 +1,8 @@
+use bitcoin::{PublicKey};
 use dlc_messages::oracle_msgs::OracleAnnouncement;
 use lightning::util::ser::Readable;
 use nostr_sdk::base64;
+use sha2::{Sha256, Digest};
 use std::io::Cursor;
 
 fn decode_bytes(str: &str) -> Result<Vec<u8>, base64::DecodeError> {
@@ -18,6 +20,9 @@ pub fn oracle_announcement_from_str(str: &str) -> OracleAnnouncement {
 
     OracleAnnouncement::read(&mut cursor).expect("Could not parse oracle announcement")
 }
+
+
+
 
 #[cfg(test)]
 mod tests {
