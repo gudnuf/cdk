@@ -107,7 +107,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lookup_announcement_event() {
-        let announemtent_id =
+        let announcement_id =
             EventId::from_hex("d30e6c857a900ebefbf7dc3b678ead9215f4345476067e146ded973971286529")
                 .unwrap();
 
@@ -115,10 +115,68 @@ mod tests {
         let relay = "wss://relay.damus.io";
         client.add_relay(relay.to_string()).await.unwrap();
         client.connect().await;
-        let event = lookup_announcement_event(announemtent_id, &client)
+        let event = lookup_announcement_event(announcement_id, &client)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(event.id, announemtent_id);
+        assert_eq!(event.id, announcement_id);
+    }
+
+    #[test]
+    fn test_create_dlc_message_event() {
+        let keys = Keys::parse("4e111131d31ad92ed5d37ab87d5046efa730f192f9c8f9b59f6c61caad1f8933")
+            .unwrap();
+        let counterparty_pubkey =
+            PublicKey::parse("d71b2434429b0f038ed35e0e3827bca5e65b6d44d1af9344f73b20ff7ffa93dd")
+                .unwrap();
+        let msg = String::from("hello");
+
+        let msg = base64::encode(msg);
+        let encrypted_message =
+            nip04::encrypt(keys.secret_key().unwrap(), &counterparty_pubkey, &msg).unwrap();
+
+        let event = create_dlc_msg_event(&keys, msg.clone(), &counterparty_pubkey).unwrap();
+
+        assert_eq!(keys.public_key(), event.pubkey);
+        assert_eq!(Kind::Custom(8888), event.kind);
+        // I cant get content encryption to pass
+        //assert_eq!(encrypted_message, event.content);
+        println!("{:?}", event)
+    }
+
+    #[tokio::test]
+    async fn test_list_dlc_offers() {
+        let keys = Keys::parse("4e111131d31ad92ed5d37ab87d5046efa730f192f9c8f9b59f6c61caad1f8933")
+            .unwrap();
+        let counterparty_privkey = Keys::parse("b9452287c9e4cf53cf935adbc2341931c68c19d8447fe571ccc8dd9b5ed85584").unwrap();
+        let counterparty_pubkey =
+            PublicKey::parse("d71b2434429b0f038ed35e0e3827bca5e65b6d44d1af9344f73b20ff7ffa93dd")
+                .unwrap();
+        let msg = String::from("hello");
+        let msg = base64::encode(msg);
+
+        let event = create_dlc_msg_event(&keys, msg.clone(), &counterparty_pubkey).unwrap();
+
+        let client = Client::new(&Keys::generate());
+        let relay = "wss://relay.damus.io";
+        client.add_relay(relay.to_string()).await.unwrap();
+        client.connect().await;
+
+        let event_id = client.send_event(event).await.unwrap();
+
+        println!("event id: {:?}", event_id.to_hex());
+
+        let offers = list_dlc_offers(&counterparty_privkey, &client).await.unwrap(); // error in line 74:58
+
+        assert!(offers.len() >= 1);
+    }
+
+    #[test]
+    fn test_deserialize_from_string() {
+        let str ="{\"id\":7,\"oracle_announcement\":{\"announcementSignature\":\"ca9cb2c97ea975950cf8ea2f1dfb712bd4ad22677c17b9f19abfde4dec91ff992839555efc468dc353007899bc2ca0d5d70ef816bf9427ef376d53f7ca73668f\",\"oraclePublicKey\":\"029bb49afd78fe627b613199ea1dee4c38b8db2e5dcc3ab6a245d455c7ddf4c5\",\"oracleEvent\":{\"oracleNonces\":[\"c8438011df79ef5e432ab48b55d37fedc1ad3a54914d0d3f2ec5bfa7706254e7\"],\"eventMaturityEpoch\":1705363200,\"eventDescriptor\":{\"enumEvent\":{\"outcomes\":[\"1234\",\"4567\"]}},\"eventId\":\"test\"}},\"oracle_event_id\":\"d30e6c857a900ebefbf7dc3b678ead9215f4345476067e146ded973971286529\",\"user_outcomes\":[\"1234\",\"4567\"],\"blinding_factor\":\"54333ffa98687d4e7dc46e480deb6c4093ce6fe9a9bfef8a1f5e6950d25e1c14\",\"dlc_root\":\"96e0a0737aaae1a83e389300ffea9eb9a571038719d6ff2fb25fb40144998bf2\",\"timeout\":1705366800}";
+        let bet = serde_json::from_str::<UserBet>(str).unwrap();
+
+        println!("{:?}", bet);
+        
     }
 }

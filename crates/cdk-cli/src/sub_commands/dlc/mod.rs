@@ -233,7 +233,7 @@ impl DLC {
             .collect::<Result<_, Error>>()?;
 
         let offer_dlc = UserBet {
-            id: 0, // TODO,
+            id: 7, // TODO,
             oracle_announcement: announcement.clone(),
             oracle_event_id: announcement_id.to_string(),
             user_outcomes: outcomes,
@@ -332,7 +332,13 @@ pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use nostr_sdk::Keys;
+    use cdk::nuts::PublicKey;
+    use dlc_messages::oracle_msgs::{EventDescriptor, OracleAnnouncement};
+    use nostr_sdk::{Client, EventId, Keys};
+
+    use crate::sub_commands::dlc::{
+        nostr_events::{list_dlc_offers, lookup_announcement_event}, utils::oracle_announcement_from_str, DLC,
+    };
 
     #[test]
     fn generate_nostr_key() {
@@ -340,6 +346,50 @@ mod tests {
         println!("{}", keys.public_key());
         println!("{}", keys.secret_key().unwrap());
     }
+
+    #[tokio::test]
+    async fn test_create_and_post_offer() {
+        const ANNOUNCEMENT: &str = "ypyyyX6pdZUM+OovHftxK9StImd8F7nxmr/eTeyR/5koOVVe/EaNw1MAeJm8LKDV1w74Fr+UJ+83bVP3ynNmjwKbtJr9eP5ie2Exmeod7kw4uNsuXcw6tqJF1FXH3fTF/dgiOwAByEOAEd95715DKrSLVdN/7cGtOlSRTQ0/LsW/p3BiVOdlpccA/dgGDAACBDEyMzQENDU2NwR0ZXN0";
+        let announcement = oracle_announcement_from_str(ANNOUNCEMENT);
+        let announcement_id =
+            EventId::from_hex("d30e6c857a900ebefbf7dc3b678ead9215f4345476067e146ded973971286529")
+                .unwrap();
+        let keys = Keys::parse("4e111131d31ad92ed5d37ab87d5046efa730f192f9c8f9b59f6c61caad1f8933")
+            .unwrap();
+        let counterparty_keys = Keys::parse(
+            "b9452287c9e4cf53cf935adbc2341931c68c19d8447fe571ccc8dd9b5ed85584",
+        )
+        .unwrap();
+
+        let dlc = DLC::new(&keys.secret_key().unwrap()).await.unwrap();
+
+        let descriptor = &announcement.oracle_event.event_descriptor;
+
+        let outcomes = match descriptor {
+            EventDescriptor::EnumEvent(ref e) => e.outcomes.clone(),
+            EventDescriptor::DigitDecompositionEvent(_) => unreachable!(),
+        };
+
+        let _event_id = dlc
+            .create_bet(announcement, announcement_id, counterparty_keys.public_key(), outcomes)
+            .await
+            .unwrap();
+
+        let client = Client::new(&Keys::generate());
+        let relay = "wss://relay.damus.io";
+        client.add_relay(relay.to_string()).await.unwrap();
+        client.connect().await;
+
+        let offers = list_dlc_offers(&counterparty_keys, &client) // error line 74:58 in nostr_events.rs
+            .await
+            .unwrap(); // if event exists should unwrap to event
+
+        println!("{:?}", offers);
+
+        assert!(offers.len()>= 1);
+    }
+
+    
 }
 
 // ALICE:
