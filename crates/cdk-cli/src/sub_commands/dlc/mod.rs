@@ -1,10 +1,10 @@
 use core::panic;
 use std::collections::HashMap;
-use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Error, Result};
 use cdk::nuts;
-use cdk::nuts::nutdlc::{DLCLeaf, PayoutStructure};
+use cdk::nuts::nutdlc::{DLCLeaf, DLCTimeoutLeaf, PayoutStructure};
 use clap::{Args, Subcommand};
 use dlc::secp256k1_zkp::hashes::sha256;
 use dlc::{
@@ -12,7 +12,6 @@ use dlc::{
     OracleInfo,
 };
 use dlc_messages::oracle_msgs::{EventDescriptor, OracleAnnouncement};
-use lightning::util::ser::Writeable;
 use nostr_sdk::{
     hashes::hex::{Case, DisplayHex},
     Client, EventId, Keys, PublicKey, SecretKey,
@@ -22,7 +21,7 @@ use schnorr_fun::adaptor::{EncryptedSign, EncryptedSignature};
 use schnorr_fun::fun::marker::{EvenY, NonZero, Normal, Public};
 use schnorr_fun::fun::{KeyPair, Point};
 use schnorr_fun::nonce::{GlobalRng, Synthetic};
-use schnorr_fun::{fun::Scalar, Message, Schnorr, Signature};
+use schnorr_fun::{fun::Scalar, Message, Schnorr};
 use serde::{Deserialize, Serialize};
 
 use sha2::Sha256;
@@ -65,6 +64,7 @@ pub struct UserBet {
     user_outcomes: Vec<String>,
     blinding_factor: String,
     dlc_root: String,
+    timeout: u64,
     // user_a dlc funding proofs
     // What other data needs to be passed around to create the contract?
 }
@@ -131,7 +131,14 @@ impl DLC {
         let winning_payout_structure = PayoutStructure::default(self.keys.public_key().to_string());
         let winning_counterparty_payout_structure =
             PayoutStructure::default(counterparty_pubkey.to_string());
-        // TODO: create blinded outcome locking points
+        // timeout set to 1 hour from event_maturity_epoch
+        let timeout = (announcement.oracle_event.event_maturity_epoch as u64)
+            + Duration::from_secs(60 * 60).as_secs();
+        let timeout_payout_structure = PayoutStructure::default_timeout(vec![
+            self.keys.public_key().to_string(),
+            counterparty_pubkey.to_string(),
+        ]);
+
         // TODO: create dlc funding proofs
 
         let oracle_info = OracleInfo {
@@ -188,7 +195,7 @@ impl DLC {
             .collect::<Result<_, Error>>()?;
 
         // create leaf hashes for each outcome
-        let leaf_hashes: Vec<[u8; 32]> = blinded_adaptor_points
+        let mut leaf_hashes: Vec<[u8; 32]> = blinded_adaptor_points
             .iter()
             .map(|(outcome, point)| {
                 let leaf = if outcomes.contains(outcome) {
@@ -210,8 +217,9 @@ impl DLC {
             })
             .collect();
 
-        // TODO: Timeoute leaf
-
+        // Add timeout leaf
+        let timeout_leaf = DLCTimeoutLeaf::new(&timeout, &timeout_payout_structure);
+        leaf_hashes.push(timeout_leaf.hash());
         let merkle_root = nuts::nutsct::merkle_root(&leaf_hashes);
 
         // TODO: not sure this is what we want to do here
@@ -231,6 +239,7 @@ impl DLC {
             user_outcomes: outcomes,
             blinding_factor: blinding_factor.to_be_bytes().to_hex_string(Case::Lower),
             dlc_root: merkle_root.to_hex_string(Case::Lower),
+            timeout,
         };
 
         let offer_dlc = serde_json::to_string(&offer_dlc)?;
