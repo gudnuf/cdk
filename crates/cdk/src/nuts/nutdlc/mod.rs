@@ -114,7 +114,7 @@ struct PostDlcRegistrationRequest {
     registrations: Vec<DLC>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct PayoutStructure(HashMap<XOnlyPublicKey, u64>);
 
 impl PayoutStructure {
