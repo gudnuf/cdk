@@ -90,6 +90,20 @@ impl ToString for DLCRoot {
     }
 }
 
+impl FromStr for DLCRoot {
+    type Err = crate::nuts::nut11::Error;
+
+    fn from_str(s: &str) -> Result<Self, crate::nuts::nut11::Error> {
+        let bytes = hex::decode(s).map_err(|_| crate::nuts::nut11::Error::InvalidHash)?;
+        if bytes.len() != 32 {
+            return Err(crate::nuts::nut11::Error::InvalidHash);
+        }
+        let mut array = [0u8; 32];
+        array.copy_from_slice(&bytes);
+        Ok(DLCRoot(array))
+    }
+}
+
 struct DLCMerkleTree {
     root: DLCRoot,
     leaves: Vec<DLCLeaf>,
@@ -109,11 +123,6 @@ pub struct DLCFundingToken {
     /// DLC Root
     pub dlc_root: DLCRoot,
 }
-
-// struct DLCSpendingConditions {
-//     data: DLCRoot,
-//     conditions: Option<SpendingConditions>,
-// }
 
 struct DLC {
     /// DLC Root

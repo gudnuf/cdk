@@ -1745,9 +1745,13 @@ impl Wallet {
                 ),
                 None => (None, None, None, None),
             },
-            SpendingConditions::DLCConditions { data, conditions } =>{ todo!()}
+            SpendingConditions::DLCConditions { data, conditions } => {
+                todo!()
+            }
 
-            SpendingConditions::SCTConditions { data, conditions } => {todo!()}
+            SpendingConditions::SCTConditions { data, conditions } => {
+                todo!()
+            }
         };
 
         if refund_keys.is_some() && locktime.is_none() {

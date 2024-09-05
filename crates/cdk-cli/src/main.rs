@@ -185,6 +185,6 @@ async fn main() -> Result<()> {
         Commands::UpdateMintUrl(sub_command_args) => {
             sub_commands::update_mint_url::update_mint_url(wallets, sub_command_args).await
         }
-        Commands::DLC(sub_command_args) => sub_commands::dlc::dlc(sub_command_args).await,
+        Commands::DLC(sub_command_args) => sub_commands::dlc::dlc(wallets, sub_command_args).await,
     }
 }

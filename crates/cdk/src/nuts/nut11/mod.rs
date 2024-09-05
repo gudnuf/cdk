@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use super::nut00::Witness;
 use super::nut01::PublicKey;
+use super::nutdlc::DLCRoot;
 use super::{Kind, Nut10Secret, Proof, Proofs, SecretKey};
 use crate::nuts::nut00::BlindedMessage;
 use crate::secret::Secret;
@@ -277,15 +278,15 @@ pub enum SpendingConditions {
         conditions: Option<Conditions>,
     },
 
-    DLCConditions{
-        data: Option<String>,  //What types go here
-        conditions: Option<String>,
+    DLCConditions {
+        data: String,
+        conditions: Option<Conditions>,
     },
 
-    SCTConditions{
-        data: Option<String>,  // What types go here
-        conditions: Option<String>, 
-    }
+    SCTConditions {
+        data: Option<String>, // What types go here
+        conditions: Option<String>,
+    },
 }
 
 impl SpendingConditions {
@@ -303,6 +304,14 @@ impl SpendingConditions {
     pub fn new_p2pk(pubkey: PublicKey, conditions: Option<Conditions>) -> Self {
         Self::P2PKConditions {
             data: pubkey,
+            conditions,
+        }
+    }
+
+    /// New DLC [SpendingConditions]
+    pub fn new_dlc(dlc_root: &DLCRoot, conditions: Option<Conditions>) -> Self {
+        Self::DLCConditions {
+            data: dlc_root.to_string(),
             conditions,
         }
     }
@@ -363,7 +372,7 @@ impl SpendingConditions {
             Self::HTLCConditions { conditions, .. } => {
                 conditions.clone().and_then(|c| c.refund_keys)
             }
-        
+
             Self::DLCConditions { data, conditions } => todo!(),
             Self::SCTConditions { data, conditions } => todo!(),
         }
@@ -392,7 +401,10 @@ impl TryFrom<Nut10Secret> for SpendingConditions {
                     .map_err(|_| Error::InvalidHash)?,
                 conditions: secret.secret_data.tags.and_then(|t| t.try_into().ok()),
             }),
-            Kind::DLC => todo!(),
+            Kind::DLC => Ok(Self::DLCConditions {
+                data: DLCRoot::from_str(&secret.secret_data.data)?.to_string(),
+                conditions: secret.secret_data.tags.and_then(|t| t.try_into().ok()),
+            }),
             Kind::SCT => todo!(),
         }
     }
@@ -407,7 +419,9 @@ impl From<SpendingConditions> for super::nut10::Secret {
             SpendingConditions::HTLCConditions { data, conditions } => {
                 super::nut10::Secret::new(Kind::HTLC, data.to_string(), conditions)
             }
-            SpendingConditions::DLCConditions { data, conditions } => todo!(),
+            SpendingConditions::DLCConditions { data, conditions } => {
+                super::nut10::Secret::new(Kind::DLC, data.to_string(), conditions)
+            }
             SpendingConditions::SCTConditions { data, conditions } => todo!(),
         }
     }
@@ -434,6 +448,9 @@ pub struct Conditions {
     ///
     /// Default [`SigFlag::SigInputs`]
     pub sig_flag: SigFlag,
+    /// DLC funding threshold
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<u64>,
 }
 
 impl Conditions {
@@ -444,6 +461,7 @@ impl Conditions {
         refund_keys: Option<Vec<PublicKey>>,
         num_sigs: Option<u64>,
         sig_flag: Option<SigFlag>,
+        threshold: Option<u64>,
     ) -> Result<Self, Error> {
         if let Some(locktime) = locktime {
             if locktime.lt(&unix_time()) {
@@ -457,6 +475,7 @@ impl Conditions {
             refund_keys,
             num_sigs,
             sig_flag: sig_flag.unwrap_or_default(),
+            threshold,
         })
     }
 }
@@ -468,6 +487,7 @@ impl From<Conditions> for Vec<Vec<String>> {
             refund_keys,
             num_sigs,
             sig_flag,
+            threshold,
         } = conditions;
 
         let mut tags = Vec::new();
@@ -488,6 +508,10 @@ impl From<Conditions> for Vec<Vec<String>> {
             tags.push(Tag::Refund(refund_keys).as_vec())
         }
         tags.push(Tag::SigFlag(sig_flag).as_vec());
+        if let Some(threshold) = threshold {
+            tags.push(Tag::DLCThreshold(threshold).as_vec());
+        }
+
         tags
     }
 }
@@ -542,12 +566,22 @@ impl TryFrom<Vec<Vec<String>>> for Conditions {
             None
         };
 
+        let threshold = if let Some(tag) = tags.get(&TagKind::DLCThreshold) {
+            match tag {
+                Tag::DLCThreshold(threshold) => Some(*threshold),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         Ok(Conditions {
             locktime,
             pubkeys,
             refund_keys,
             num_sigs,
             sig_flag,
+            threshold,
         })
     }
 }
@@ -567,6 +601,9 @@ pub enum TagKind {
     Refund,
     /// Pubkey
     Pubkeys,
+    /// DLC funding threshold
+    #[serde(rename = "threshold")]
+    DLCThreshold,
     /// Custom tag kind
     Custom(String),
 }
@@ -579,6 +616,7 @@ impl fmt::Display for TagKind {
             Self::Locktime => write!(f, "locktime"),
             Self::Refund => write!(f, "refund"),
             Self::Pubkeys => write!(f, "pubkeys"),
+            Self::DLCThreshold => write!(f, "threshold"),
             Self::Custom(kind) => write!(f, "{}", kind),
         }
     }
@@ -595,6 +633,7 @@ where
             "locktime" => Self::Locktime,
             "refund" => Self::Refund,
             "pubkeys" => Self::Pubkeys,
+            "threshold" => Self::DLCThreshold,
             t => Self::Custom(t.to_owned()),
         }
     }
@@ -675,6 +714,8 @@ pub enum Tag {
     Refund(Vec<PublicKey>),
     /// Pubkeys [`Tag`]
     PubKeys(Vec<PublicKey>),
+    /// DLC funding threshold [`Tag`]
+    DLCThreshold(u64),
 }
 
 impl Tag {
@@ -686,6 +727,7 @@ impl Tag {
             Self::LockTime(_) => TagKind::Locktime,
             Self::Refund(_) => TagKind::Refund,
             Self::PubKeys(_) => TagKind::Pubkeys,
+            Self::DLCThreshold(_) => TagKind::DLCThreshold,
         }
     }
 
@@ -729,6 +771,7 @@ where
 
                 Ok(Self::PubKeys(pubkeys))
             }
+            TagKind::DLCThreshold => Ok(Tag::DLCThreshold(tag[1].as_ref().parse()?)),
             _ => Err(Error::UnknownTag),
         }
     }
@@ -753,6 +796,11 @@ impl From<Tag> for Vec<String> {
                 for pubkey in pubkeys {
                     tag.push(pubkey.to_string())
                 }
+                tag
+            }
+            Tag::DLCThreshold(threshold) => {
+                let mut tag = vec![TagKind::DLCThreshold.to_string()];
+                tag.push(threshold.to_string());
                 tag
             }
         }
@@ -818,6 +866,7 @@ mod tests {
             .unwrap()]),
             num_sigs: Some(2),
             sig_flag: SigFlag::SigAll,
+            threshold: None,
         };
 
         let secret: Nut10Secret = Nut10Secret::new(Kind::P2PK, data.to_string(), Some(conditions));
@@ -852,6 +901,7 @@ mod tests {
             refund_keys: Some(vec![v_key]),
             num_sigs: Some(2),
             sig_flag: SigFlag::SigInputs,
+            threshold: None,
         };
 
         let secret: Secret = Nut10Secret::new(Kind::P2PK, v_key.to_string(), Some(conditions))
