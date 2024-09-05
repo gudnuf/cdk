@@ -3,13 +3,13 @@ use std::{collections::HashMap, str::FromStr};
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
 
-use super::{nut00::token::TokenV3Token, nut01::PublicKey, nutsct::merkle_root, Proofs};
+use super::CurrencyUnit;
+use super::{nut00::token::TokenV3Token, nut01::PublicKey, Proofs};
+use crate::util::hex;
 use crate::Amount;
 use bitcoin::key::XOnlyPublicKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
-
-use super::CurrencyUnit;
 
 #[derive(Debug, Error)]
 pub enum Error {}
@@ -65,11 +65,28 @@ impl DLCTimeoutLeaf {
     }
 }
 
-struct DLCRoot(String);
+/// Hash of all spending conditions and blinded locking points
+pub struct DLCRoot([u8; 32]);
 
 impl DLCRoot {
-    fn compute(leaves: Vec<DLCLeaf>, timeout_leaf: Option<DLCTimeoutLeaf>) -> Self {
-        todo!()
+    /// new [`DLCRoot`] from [`DLCLeaf`]s and optional [`DLCTimeoutLeaf`]
+    pub fn compute(leaves: Vec<DLCLeaf>, timeout_leaf: Option<DLCTimeoutLeaf>) -> Self {
+        let mut input: Vec<[u8; 32]> = Vec::new();
+        for leaf in leaves {
+            input.push(leaf.hash());
+        }
+        if let Some(timeout_leaf) = timeout_leaf {
+            input.push(timeout_leaf.hash());
+        }
+        Self {
+            0: crate::nuts::nutsct::merkle_root(&input),
+        }
+    }
+}
+
+impl ToString for DLCRoot {
+    fn to_string(&self) -> String {
+        hex::encode(self.0)
     }
 }
 

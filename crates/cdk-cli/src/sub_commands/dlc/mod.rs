@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Error, Result};
 use cdk::amount::Amount;
 use cdk::nuts;
-use cdk::nuts::nutdlc::{DLCLeaf, DLCTimeoutLeaf, PayoutStructure};
+use cdk::nuts::nutdlc::{DLCLeaf, DLCRoot, DLCTimeoutLeaf, PayoutStructure};
 use clap::{Args, Subcommand};
 use dlc::secp256k1_zkp::hashes::sha256;
 use dlc::{
@@ -203,10 +203,10 @@ impl DLC {
             .collect::<Result<_, Error>>()?;
 
         // create leaf hashes for each outcome
-        let mut leaf_hashes: Vec<[u8; 32]> = blinded_adaptor_points
+        let leaf_hashes: Vec<DLCLeaf> = blinded_adaptor_points
             .iter()
             .map(|(outcome, point)| {
-                let leaf = if outcomes.contains(outcome) {
+                if outcomes.contains(outcome) {
                     // we win
                     DLCLeaf {
                         blinded_locking_point: cdk::nuts::PublicKey::from_slice(&point.serialize())
@@ -220,15 +220,13 @@ impl DLC {
                             .expect("valid public key"),
                         payout: winning_counterparty_payout_structure.clone(),
                     }
-                };
-                leaf.hash()
+                }
             })
             .collect();
 
         // Add timeout leaf
         let timeout_leaf = DLCTimeoutLeaf::new(&timeout, &timeout_payout_structure);
-        leaf_hashes.push(timeout_leaf.hash());
-        let merkle_root = nuts::nutsct::merkle_root(&leaf_hashes);
+        let dlc_root = DLCRoot::compute(leaf_hashes, Some(timeout_leaf));
 
         // TODO: not sure this is what we want to do here
         let sigs: HashMap<String, EncryptedSignature> = blinded_adaptor_points
@@ -246,7 +244,7 @@ impl DLC {
             oracle_event_id: announcement_id.to_string(),
             user_outcomes: outcomes,
             blinding_factor: blinding_factor.to_be_bytes().to_hex_string(Case::Lower),
-            dlc_root: merkle_root.to_hex_string(Case::Lower),
+            dlc_root: dlc_root.to_string(),
             timeout,
             amount,
             locked_ecash: None,
