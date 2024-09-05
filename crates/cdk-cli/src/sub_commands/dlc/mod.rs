@@ -337,7 +337,9 @@ mod tests {
     use nostr_sdk::{Client, EventId, Keys};
 
     use crate::sub_commands::dlc::{
-        nostr_events::{list_dlc_offers, lookup_announcement_event}, utils::oracle_announcement_from_str, DLC,
+        nostr_events::{delete_all_dlc_offers, list_dlc_offers, lookup_announcement_event},
+        utils::oracle_announcement_from_str,
+        DLC,
     };
 
     #[test]
@@ -386,10 +388,11 @@ mod tests {
 
         println!("{:?}", offers);
 
-        assert!(offers.len()>= 1);
-    }
+        assert!(offers.len() >= 1);
 
-    
+        /* clean up */
+        delete_all_dlc_offers(&keys, &client).await;
+    }
 }
 
 // ALICE:

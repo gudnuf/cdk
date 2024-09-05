@@ -169,6 +169,9 @@ mod tests {
         let offers = list_dlc_offers(&counterparty_privkey, &client).await.unwrap(); // error in line 74:58
 
         assert!(offers.len() >= 1);
+
+        /* clean up */
+        delete_all_dlc_offers(&keys, &client).await;
     }
 
     #[test]
