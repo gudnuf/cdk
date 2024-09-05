@@ -356,12 +356,8 @@ mod tests {
         let announcement_id =
             EventId::from_hex("d30e6c857a900ebefbf7dc3b678ead9215f4345476067e146ded973971286529")
                 .unwrap();
-        let keys = Keys::parse("4e111131d31ad92ed5d37ab87d5046efa730f192f9c8f9b59f6c61caad1f8933")
-            .unwrap();
-        let counterparty_keys = Keys::parse(
-            "b9452287c9e4cf53cf935adbc2341931c68c19d8447fe571ccc8dd9b5ed85584",
-        )
-        .unwrap();
+        let keys = Keys::generate();
+        let counterparty_keys = Keys::generate();
 
         let dlc = DLC::new(&keys.secret_key().unwrap()).await.unwrap();
 

@@ -126,9 +126,7 @@ mod tests {
     fn test_create_dlc_message_event() {
         let keys = Keys::parse("4e111131d31ad92ed5d37ab87d5046efa730f192f9c8f9b59f6c61caad1f8933")
             .unwrap();
-        let counterparty_pubkey =
-            PublicKey::parse("d71b2434429b0f038ed35e0e3827bca5e65b6d44d1af9344f73b20ff7ffa93dd")
-                .unwrap();
+        let counterparty_pubkey = Keys::generate().public_key();
         let msg = String::from("hello");
 
         let msg = base64::encode(msg);
@@ -146,12 +144,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_dlc_offers() {
-        let keys = Keys::parse("4e111131d31ad92ed5d37ab87d5046efa730f192f9c8f9b59f6c61caad1f8933")
-            .unwrap();
-        let counterparty_privkey = Keys::parse("b9452287c9e4cf53cf935adbc2341931c68c19d8447fe571ccc8dd9b5ed85584").unwrap();
-        let counterparty_pubkey =
-            PublicKey::parse("d71b2434429b0f038ed35e0e3827bca5e65b6d44d1af9344f73b20ff7ffa93dd")
-                .unwrap();
+        let keys = Keys::generate();
+        let counterparty_privkey = Keys::generate();
+        let counterparty_pubkey = counterparty_privkey.public_key();
         let msg = String::from("hello");
         let msg = base64::encode(msg);
 
