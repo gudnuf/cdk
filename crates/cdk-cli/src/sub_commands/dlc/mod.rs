@@ -1,8 +1,10 @@
 use core::panic;
 use std::collections::HashMap;
+use std::io::stdin;
 use std::time::Duration;
 
 use anyhow::{Error, Result};
+use cdk::amount::Amount;
 use cdk::nuts;
 use cdk::nuts::nutdlc::{DLCLeaf, DLCTimeoutLeaf, PayoutStructure};
 use clap::{Args, Subcommand};
@@ -43,6 +45,8 @@ pub enum DLCCommands {
         key: String,
         oracle_event_id: String,
         counterparty_pubkey: String,
+        amount: u64,
+        //needs to show user outcomes an let user decide which outcome he wants
     },
     ListOffers {
         key: String,
@@ -65,8 +69,11 @@ pub struct UserBet {
     blinding_factor: String,
     dlc_root: String,
     timeout: u64,
-    // user_a dlc funding proofs
-    // What other data needs to be passed around to create the contract?
+    amount: u64,
+    locked_ecash: Option<String>, // needs to be a new struct with x and Z'
+
+    payoutstructs: Vec<PayoutStructure>, // user_a dlc funding proofs
+                                         // What other data needs to be passed around to create the contract?
 }
 
 /// To manage DLC contracts (ie. creating and accepting bets)
@@ -126,6 +133,7 @@ impl DLC {
         announcement_id: EventId,
         counterparty_pubkey: nostr_sdk::key::PublicKey,
         outcomes: Vec<String>,
+        amount: u64,
     ) -> Result<EventId, Error> {
         // TODO:: figure out how to pass XOnlyPublicKey to PayoutStructure
         let winning_payout_structure = PayoutStructure::default(self.keys.public_key().to_string());
@@ -158,7 +166,7 @@ impl DLC {
             return Err(Error::msg("Invalid event descriptor"));
         };
 
-        if all_outcomes.len() != outcomes.len() {
+        if all_outcomes.len() < outcomes.len() {
             return Err(Error::msg(
                 "Input outcomes should be a subset of all outcomes",
             ));
@@ -240,6 +248,12 @@ impl DLC {
             blinding_factor: blinding_factor.to_be_bytes().to_hex_string(Case::Lower),
             dlc_root: merkle_root.to_hex_string(Case::Lower),
             timeout,
+            amount,
+            locked_ecash: None,
+            payoutstructs: vec![
+                winning_payout_structure,
+                winning_counterparty_payout_structure,
+            ],
         };
 
         let offer_dlc = serde_json::to_string(&offer_dlc)?;
@@ -267,6 +281,7 @@ pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
             key,
             oracle_event_id,
             counterparty_pubkey,
+            amount,
         } => {
             let keys = Keys::parse(key).unwrap();
             let oracle_event_id = EventId::from_hex(oracle_event_id).unwrap();
@@ -289,12 +304,31 @@ pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
             );
 
             // // TODO: get the outcomes from the oracle announcement???
+
             let outcomes = match oracle_announcement.oracle_event.event_descriptor {
                 EventDescriptor::EnumEvent(ref e) => e.outcomes.clone(),
                 EventDescriptor::DigitDecompositionEvent(_) => unreachable!(),
             };
 
-            println!("Outcomes: {:?}", outcomes);
+            for (i, outcome) in outcomes.clone().into_iter().enumerate() {
+                println!("outcome {i}: {outcome}");
+            }
+
+            let mut input_line = String::new();
+
+            println!("please select outcome by number");
+
+            stdin()
+                .read_line(&mut input_line)
+                .expect("Failed to read line");
+            let choice: i32 = input_line.trim().parse().expect("Input not an integer");
+
+            let outcome_choice = vec![outcomes[choice as usize].clone()];
+
+            println!(
+                "You chose outcome {:?} to bet {} on",
+                outcome_choice, amount
+            );
 
             let event_id = dlc
                 .create_bet(
@@ -302,6 +336,7 @@ pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
                     oracle_event_id,
                     counterparty_pubkey,
                     outcomes,
+                    *amount,
                 )
                 .await?;
 
@@ -332,7 +367,7 @@ pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use cdk::nuts::PublicKey;
+    use cdk::{amount::Amount, nuts::PublicKey};
     use dlc_messages::oracle_msgs::{EventDescriptor, OracleAnnouncement};
     use nostr_sdk::{Client, EventId, Keys};
 
@@ -367,9 +402,17 @@ mod tests {
             EventDescriptor::EnumEvent(ref e) => e.outcomes.clone(),
             EventDescriptor::DigitDecompositionEvent(_) => unreachable!(),
         };
+        let outcome1 = &outcomes.clone()[0];
 
+        let amount = 7;
         let _event_id = dlc
-            .create_bet(announcement, announcement_id, counterparty_keys.public_key(), outcomes)
+            .create_bet(
+                announcement,
+                announcement_id,
+                counterparty_keys.public_key(),
+                vec![outcome1.clone()],
+                amount,
+            )
             .await
             .unwrap();
 

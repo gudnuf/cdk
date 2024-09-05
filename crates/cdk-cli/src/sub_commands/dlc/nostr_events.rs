@@ -161,7 +161,9 @@ mod tests {
 
         println!("event id: {:?}", event_id.to_hex());
 
-        let offers = list_dlc_offers(&counterparty_privkey, &client).await.unwrap(); // error in line 74:58
+        let offers = list_dlc_offers(&counterparty_privkey, &client)
+            .await
+            .unwrap(); // error in line 74:58
 
         assert!(offers.len() >= 1);
 
@@ -175,6 +177,5 @@ mod tests {
         let bet = serde_json::from_str::<UserBet>(str).unwrap();
 
         println!("{:?}", bet);
-        
     }
 }
