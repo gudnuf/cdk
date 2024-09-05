@@ -32,6 +32,7 @@ mod tests {
     #[test]
     fn test_decode_oracle_announcement() {
         let announcement = oracle_announcement_from_str(ANNOUNCEMENT);
+        println!("{:?}", announcement);
 
         assert_eq!(
             announcement.announcement_signature,
