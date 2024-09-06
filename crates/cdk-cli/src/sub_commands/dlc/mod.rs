@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Error, Result};
 use cdk::amount::{Amount, SplitTarget};
 use cdk::nuts::nutdlc::{DLCLeaf, DLCRoot, DLCTimeoutLeaf, PayoutStructure};
-use cdk::nuts::{self, Conditions, SigFlag};
+use cdk::nuts::{self, Conditions, SigFlag, TokenV3};
 use cdk::url::UncheckedUrl;
 use cdk::wallet::Wallet;
 use clap::{Args, Subcommand};
@@ -74,7 +74,7 @@ pub struct UserBet {
     dlc_root: String,
     timeout: u64,
     amount: u64,
-    locked_ecash: Option<String>, // needs to be a new struct with x and Z'
+    locked_ecash: Option<Vec<TokenV3>>, 
 
     payoutstructs: Vec<PayoutStructure>, // user_a dlc funding proofs
                                          // What other data needs to be passed around to create the contract?
@@ -131,7 +131,7 @@ impl DLC {
         wallet: &Wallet,
         dlc_root: &DLCRoot,
         amount: u64,
-    ) -> Result<()> {
+    ) -> Result<TokenV3, Error> {
         let dlc_conditions = nuts::nut11::SpendingConditions::new_dlc(
             &dlc_root,
             Some(Conditions {
@@ -151,7 +151,7 @@ impl DLC {
             .select_proofs_to_send(Amount::from(amount), available_proofs, include_fees)
             .await
             .unwrap();
-        let fundingProofs = wallet
+        let funding_proofs = wallet
             .swap(
                 Some(Amount::from(amount)),
                 SplitTarget::default(),
@@ -164,15 +164,17 @@ impl DLC {
 
         // TODO: encode this as a Token
 
+        let token = cdk::nuts::nut00::TokenV3::new(UncheckedUrl::from("https://testnut.cashu.space"), funding_proofs.clone(), Some(String::from("dlc locking proofs")), None)?;
+
         println!(
             "Funding proof secrets: {:?}",
-            fundingProofs
+            funding_proofs
                 .iter()
                 .map(|p| p.secret.to_string())
                 .collect::<Vec<String>>()
         );
 
-        Ok(())
+        Ok(token)
     }
 
     /// Start a new DLC contract, and send to the counterparty
@@ -294,7 +296,7 @@ impl DLC {
             .collect::<Result<_, Error>>()?;
 
         // todo: include this in the offer
-        self.create_funding_token(&wallet, &dlc_root, amount)
+        let token = self.create_funding_token(&wallet, &dlc_root, amount)
             .await?;
 
         let offer_dlc = UserBet {
@@ -306,7 +308,7 @@ impl DLC {
             dlc_root: dlc_root.to_string(),
             timeout,
             amount,
-            locked_ecash: None,
+            locked_ecash: Some(vec!(token)),
             payoutstructs: vec![
                 winning_payout_structure,
                 winning_counterparty_payout_structure,
@@ -314,6 +316,8 @@ impl DLC {
         };
 
         let offer_dlc = serde_json::to_string(&offer_dlc)?;
+
+        println!("{:?}", offer_dlc);
 
         let offer_dlc_event =
             nostr_events::create_dlc_msg_event(&self.keys, offer_dlc, &counterparty_pubkey)?;
