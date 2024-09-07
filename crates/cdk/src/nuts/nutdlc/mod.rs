@@ -66,6 +66,7 @@ impl DLCTimeoutLeaf {
 }
 
 /// Hash of all spending conditions and blinded locking points
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DLCRoot([u8; 32]);
 
 impl DLCRoot {
@@ -124,20 +125,52 @@ pub struct DLCFundingToken {
     pub dlc_root: DLCRoot,
 }
 
-struct DLC {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DLC {
     /// DLC Root
-    pub dlc_root: DLCRoot,
+    pub dlc_root: String,
 
-    funding_amount: Amount,
+    pub funding_amount: Amount,
 
-    unit: CurrencyUnit,
+    pub unit: CurrencyUnit,
 
-    inputs: Proofs, // locked with DLC secret - only spendable in this DLC
+    pub inputs: Proofs, // locked with DLC secret - only spendable in this DLC
 }
 
 /// see https://github.com/cashubtc/nuts/blob/a86a4e8ce0b9a76ce9b242d6c2c2ab846b3e1955/dlc.md#mint-registration
-struct PostDlcRegistrationRequest {
-    registrations: Vec<DLC>,
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PostDLCRegistrationRequest {
+    pub registrations: Vec<DLC>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DLCRegistrationResponse {
+    pub funded: Vec<FundedDLC>,
+    pub errors: Option<Vec<DLCError>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct FundedDLC {
+    pub dlc_root: DLCRoot,
+    pub funding_proof: FundingProof,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct FundingProof {
+    pub keyset: String,    // keyset_id_str
+    pub signature: String, // bip340_sig_hex
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DLCError {
+    pub dlc_root: DLCRoot,
+    pub bad_inputs: Vec<BadInput>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BadInput {
+    pub index: u32,
+    pub detail: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

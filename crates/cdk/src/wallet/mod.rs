@@ -18,6 +18,7 @@ use crate::amount::SplitTarget;
 use crate::cdk_database::{self, WalletDatabase};
 use crate::dhke::{construct_proofs, hash_to_curve};
 use crate::nuts::nut00::token::Token;
+use crate::nuts::nutdlc::{PostDLCRegistrationRequest, DLC};
 use crate::nuts::{
     nut10, nut12, Conditions, CurrencyUnit, Id, KeySetInfo, Keys, Kind, MeltQuoteBolt11Response,
     MeltQuoteState, MintInfo, MintQuoteBolt11Response, MintQuoteState, PreMintSecrets, PreSwap,
@@ -1880,6 +1881,28 @@ impl Wallet {
                     .verify_dleq(mint_pubkey)
                     .map_err(|_| Error::CouldNotVerifyDleq)?;
             }
+        }
+
+        Ok(())
+    }
+
+    /// Register a DLC
+    #[instrument(skip(self))]
+    pub async fn register_dlc(&self, dlc: DLC) -> Result<(), Error> {
+        let fund_dlc_request = PostDLCRegistrationRequest {
+            registrations: vec![dlc],
+        };
+
+        let fund_dlc_response = self
+            .client
+            .post_register_dlc(self.mint_url.clone().try_into()?, fund_dlc_request)
+            .await?;
+
+        for funded_dlc in fund_dlc_response.funded {
+            let dlc_root = funded_dlc.dlc_root;
+            let funding_proof = funded_dlc.funding_proof;
+            println!("Funded DLC: {:?}", dlc_root);
+            println!("Funding Proof: {:?}", funding_proof);
         }
 
         Ok(())

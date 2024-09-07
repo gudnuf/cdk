@@ -9,6 +9,7 @@ use super::Error;
 use crate::error::ErrorResponse;
 use crate::nuts::nut05::MeltBolt11Response;
 use crate::nuts::nut15::Mpp;
+use crate::nuts::nutdlc::{DLCRegistrationResponse, PostDLCRegistrationRequest};
 use crate::nuts::{
     BlindedMessage, CheckStateRequest, CheckStateResponse, CurrencyUnit, Id, KeySet, KeysResponse,
     KeysetResponse, MeltBolt11Request, MeltQuoteBolt11Request, MeltQuoteBolt11Response,
@@ -346,6 +347,28 @@ impl HttpClient {
 
         match serde_json::from_value::<RestoreResponse>(res.clone()) {
             Ok(melt_quote_response) => Ok(melt_quote_response),
+            Err(_) => Err(ErrorResponse::from_value(res)?.into()),
+        }
+    }
+
+    /// Fund a DLC
+    pub async fn post_register_dlc(
+        &self,
+        mint_url: Url,
+        fund_dlc_request: PostDLCRegistrationRequest,
+    ) -> Result<DLCRegistrationResponse, Error> {
+        let url = join_url(mint_url, &["v1", "dlc", "fund"])?;
+        let res = self
+            .inner
+            .post(url)
+            .json(&fund_dlc_request)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+
+        match serde_json::from_value::<DLCRegistrationResponse>(res.clone()) {
+            Ok(dlc_response) => Ok(dlc_response),
             Err(_) => Err(ErrorResponse::from_value(res)?.into()),
         }
     }
