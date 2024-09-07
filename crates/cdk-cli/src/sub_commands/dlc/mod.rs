@@ -6,7 +6,8 @@ use std::time::Duration;
 use anyhow::{Error, Result};
 use cdk::amount::{Amount, SplitTarget};
 use cdk::nuts::nutdlc::{DLCLeaf, DLCRoot, DLCTimeoutLeaf, PayoutStructure};
-use cdk::nuts::{self, Conditions, SigFlag, TokenV3};
+use cdk::nuts::{self, , TokenV3};
+use cdk::secret;
 use cdk::url::UncheckedUrl;
 use cdk::wallet::Wallet;
 use clap::{Args, Subcommand};
@@ -74,7 +75,7 @@ pub struct UserBet {
     dlc_root: String,
     timeout: u64,
     amount: u64,
-    locked_ecash: Option<Vec<TokenV3>>, 
+    locked_ecash: Option<Vec<TokenV3>>,
 
     payoutstructs: Vec<PayoutStructure>, // user_a dlc funding proofs
                                          // What other data needs to be passed around to create the contract?
@@ -131,18 +132,24 @@ impl DLC {
         wallet: &Wallet,
         dlc_root: &DLCRoot,
         amount: u64,
-    ) -> Result<TokenV3, Error> {
-        let dlc_conditions = nuts::nut11::SpendingConditions::new_dlc(
-            &dlc_root,
-            Some(Conditions {
-                locktime: None,
-                pubkeys: None,
-                refund_keys: None,
-                num_sigs: None,
-                sig_flag: SigFlag::SigInputs, // TODO: figure out how to not inclue a sig_flag
-                threshold: Some(1),           // TOOD: this should come from payout structures
-            }),
-        );
+    ) -> Result<(TokenV3, secret::Secret), Error> {
+        let threshold = 1; // TOOD: this should come from payout structures
+        let dlc_conditions =
+            nuts::nut11::Conditions::new(None, None, None, None, None, Some(threshold))?;
+
+        let dlc_secret =
+            nuts::nut10::Secret::new(nuts::Kind::DLC, dlc_root.to_string(), Some(dlc_conditions));
+        let dlc_secret = dlc_secret.try_into()?;
+        // TODO: this will put the same secret into each proof.
+        // I'm not sure if the mint will allow us to spend multiple proofs with the same backup secret
+        // If not, we can use a p2pk backup, or new backup secret for each proof
+        let backup_secret = secret::Secret::generate();
+
+        //
+        let sct_root = nuts::nutsct::sct_root(vec![dlc_secret, backup_secret.clone()]);
+
+        let sct_conditions = nuts::nut11::SpendingConditions::new_sct(sct_root);
+
         let available_proofs = wallet.get_proofs().await?;
 
         let include_fees = false;
@@ -156,7 +163,7 @@ impl DLC {
                 Some(Amount::from(amount)),
                 SplitTarget::default(),
                 selected,
-                Some(dlc_conditions),
+                Some(sct_conditions),
                 include_fees,
             )
             .await?
@@ -164,7 +171,12 @@ impl DLC {
 
         // TODO: encode this as a Token
 
-        let token = cdk::nuts::nut00::TokenV3::new(UncheckedUrl::from("https://testnut.cashu.space"), funding_proofs.clone(), Some(String::from("dlc locking proofs")), None)?;
+        let token = cdk::nuts::nut00::TokenV3::new(
+            UncheckedUrl::from("https://testnut.cashu.space"),
+            funding_proofs.clone(),
+            Some(String::from("dlc locking proofs")),
+            None,
+        )?;
 
         println!(
             "Funding proof secrets: {:?}",
@@ -174,7 +186,7 @@ impl DLC {
                 .collect::<Vec<String>>()
         );
 
-        Ok(token)
+        Ok((token, backup_secret))
     }
 
     /// Start a new DLC contract, and send to the counterparty
@@ -295,9 +307,11 @@ impl DLC {
             })
             .collect::<Result<_, Error>>()?;
 
-        // todo: include this in the offer
-        let token = self.create_funding_token(&wallet, &dlc_root, amount)
+        let (token, backup_secret) = self
+            .create_funding_token(&wallet, &dlc_root, amount)
             .await?;
+
+        // TODO: backup the backup secret
 
         let offer_dlc = UserBet {
             id: 7, // TODO,
@@ -308,7 +322,7 @@ impl DLC {
             dlc_root: dlc_root.to_string(),
             timeout,
             amount,
-            locked_ecash: Some(vec!(token)),
+            locked_ecash: Some(vec![token]),
             payoutstructs: vec![
                 winning_payout_structure,
                 winning_counterparty_payout_structure,
