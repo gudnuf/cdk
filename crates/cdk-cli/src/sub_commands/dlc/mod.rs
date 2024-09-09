@@ -1,12 +1,14 @@
 use core::panic;
 use std::collections::HashMap;
-use std::io::stdin;
+use std::io::{self, stdin, Write};
 use std::time::Duration;
 
 use anyhow::{Error, Result};
-use cdk::amount::Amount;
-use cdk::nuts;
-use cdk::nuts::nutdlc::{DLCLeaf, DLCTimeoutLeaf, PayoutStructure};
+use cdk::amount::{Amount, SplitTarget};
+use cdk::nuts::nutdlc::{DLCLeaf, DLCRoot, DLCTimeoutLeaf, PayoutStructure};
+use cdk::nuts::{self, Conditions, SigFlag, TokenV3};
+use cdk::url::UncheckedUrl;
+use cdk::wallet::Wallet;
 use clap::{Args, Subcommand};
 use dlc::secp256k1_zkp::hashes::sha256;
 use dlc::{
@@ -27,6 +29,8 @@ use schnorr_fun::{fun::Scalar, Message, Schnorr};
 use serde::{Deserialize, Serialize};
 
 use sha2::Sha256;
+
+use super::balance::mint_balances;
 
 pub mod nostr_events;
 pub mod utils;
@@ -70,7 +74,7 @@ pub struct UserBet {
     dlc_root: String,
     timeout: u64,
     amount: u64,
-    locked_ecash: Option<String>, // needs to be a new struct with x and Z'
+    locked_ecash: Option<Vec<TokenV3>>, 
 
     payoutstructs: Vec<PayoutStructure>, // user_a dlc funding proofs
                                          // What other data needs to be passed around to create the contract?
@@ -78,6 +82,7 @@ pub struct UserBet {
 
 /// To manage DLC contracts (ie. creating and accepting bets)
 // TODO: Different name?
+// TODO: put the wallet in here instead of passing it in every function
 pub struct DLC {
     keys: Keys,
     nostr: Client,
@@ -121,6 +126,57 @@ impl DLC {
             .encrypted_sign(&self.signing_keypair, &encryption_key, message)
     }
 
+    async fn create_funding_token(
+        &self,
+        wallet: &Wallet,
+        dlc_root: &DLCRoot,
+        amount: u64,
+    ) -> Result<TokenV3, Error> {
+        let dlc_conditions = nuts::nut11::SpendingConditions::new_dlc(
+            &dlc_root,
+            Some(Conditions {
+                locktime: None,
+                pubkeys: None,
+                refund_keys: None,
+                num_sigs: None,
+                sig_flag: SigFlag::SigInputs, // TODO: figure out how to not inclue a sig_flag
+                threshold: Some(1),           // TOOD: this should come from payout structures
+            }),
+        );
+        let available_proofs = wallet.get_proofs().await?;
+
+        let include_fees = false;
+
+        let selected = wallet
+            .select_proofs_to_send(Amount::from(amount), available_proofs, include_fees)
+            .await
+            .unwrap();
+        let funding_proofs = wallet
+            .swap(
+                Some(Amount::from(amount)),
+                SplitTarget::default(),
+                selected,
+                Some(dlc_conditions),
+                include_fees,
+            )
+            .await?
+            .unwrap();
+
+        // TODO: encode this as a Token
+
+        let token = cdk::nuts::nut00::TokenV3::new(UncheckedUrl::from("https://testnut.cashu.space"), funding_proofs.clone(), Some(String::from("dlc locking proofs")), None)?;
+
+        println!(
+            "Funding proof secrets: {:?}",
+            funding_proofs
+                .iter()
+                .map(|p| p.secret.to_string())
+                .collect::<Vec<String>>()
+        );
+
+        Ok(token)
+    }
+
     /// Start a new DLC contract, and send to the counterparty
     /// # Arguments
     /// * `announcement` - OracleAnnouncement
@@ -129,6 +185,7 @@ impl DLC {
     /// * `outcomes` - ??outcomes this user wants to bet on?? I think!
     pub async fn create_bet(
         &self,
+        wallet: &Wallet,
         announcement: OracleAnnouncement,
         announcement_id: EventId,
         counterparty_pubkey: nostr_sdk::key::PublicKey,
@@ -203,10 +260,10 @@ impl DLC {
             .collect::<Result<_, Error>>()?;
 
         // create leaf hashes for each outcome
-        let mut leaf_hashes: Vec<[u8; 32]> = blinded_adaptor_points
+        let leaf_hashes: Vec<DLCLeaf> = blinded_adaptor_points
             .iter()
             .map(|(outcome, point)| {
-                let leaf = if outcomes.contains(outcome) {
+                if outcomes.contains(outcome) {
                     // we win
                     DLCLeaf {
                         blinded_locking_point: cdk::nuts::PublicKey::from_slice(&point.serialize())
@@ -220,15 +277,13 @@ impl DLC {
                             .expect("valid public key"),
                         payout: winning_counterparty_payout_structure.clone(),
                     }
-                };
-                leaf.hash()
+                }
             })
             .collect();
 
         // Add timeout leaf
         let timeout_leaf = DLCTimeoutLeaf::new(&timeout, &timeout_payout_structure);
-        leaf_hashes.push(timeout_leaf.hash());
-        let merkle_root = nuts::nutsct::merkle_root(&leaf_hashes);
+        let dlc_root = DLCRoot::compute(leaf_hashes, Some(timeout_leaf));
 
         // TODO: not sure this is what we want to do here
         let sigs: HashMap<String, EncryptedSignature> = blinded_adaptor_points
@@ -240,16 +295,20 @@ impl DLC {
             })
             .collect::<Result<_, Error>>()?;
 
+        // todo: include this in the offer
+        let token = self.create_funding_token(&wallet, &dlc_root, amount)
+            .await?;
+
         let offer_dlc = UserBet {
             id: 7, // TODO,
             oracle_announcement: announcement.clone(),
             oracle_event_id: announcement_id.to_string(),
             user_outcomes: outcomes,
             blinding_factor: blinding_factor.to_be_bytes().to_hex_string(Case::Lower),
-            dlc_root: merkle_root.to_hex_string(Case::Lower),
+            dlc_root: dlc_root.to_string(),
             timeout,
             amount,
-            locked_ecash: None,
+            locked_ecash: Some(vec!(token)),
             payoutstructs: vec![
                 winning_payout_structure,
                 winning_counterparty_payout_structure,
@@ -257,6 +316,8 @@ impl DLC {
         };
 
         let offer_dlc = serde_json::to_string(&offer_dlc)?;
+
+        println!("{:?}", offer_dlc);
 
         let offer_dlc_event =
             nostr_events::create_dlc_msg_event(&self.keys, offer_dlc, &counterparty_pubkey)?;
@@ -272,7 +333,10 @@ impl DLC {
     }
 }
 
-pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
+pub async fn dlc(
+    wallets: HashMap<UncheckedUrl, Wallet>,
+    sub_command_args: &DLCSubCommand,
+) -> Result<()> {
     //let keys =
     //   Keys::parse("nsec15jldh0htg2qeeqmqd628js8386fu4xwpnuqddacc64gh0ezdum6qaw574p").unwrap();
 
@@ -330,8 +394,26 @@ pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
                 outcome_choice, amount
             );
 
+            /* let user pick which wallet to use */
+            let mints_amounts = mint_balances(wallets).await?;
+
+            println!("Enter a mint number to create a DLC offer for");
+
+            let mut user_input = String::new();
+            io::stdout().flush().unwrap();
+            stdin().read_line(&mut user_input)?;
+
+            let mint_number: usize = user_input.trim().parse()?;
+
+            if mint_number.gt(&(mints_amounts.len() - 1)) {
+                crate::bail!("Invalid mint number");
+            }
+
+            let wallet = mints_amounts[mint_number].0.clone();
+
             let event_id = dlc
                 .create_bet(
+                    &wallet,
                     oracle_announcement,
                     oracle_event_id,
                     counterparty_pubkey,
@@ -367,25 +449,86 @@ pub async fn dlc(sub_command_args: &DLCSubCommand) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use cdk::{amount::Amount, nuts::PublicKey};
-    use dlc_messages::oracle_msgs::{EventDescriptor, OracleAnnouncement};
+    use std::{collections::HashMap, fs, str::FromStr, sync::Arc};
+
+    use bip39::Mnemonic;
+    use cdk::{
+        cdk_database::{self, WalletDatabase},
+        url::UncheckedUrl,
+        wallet::Wallet,
+    };
+    use cdk_sqlite::WalletSqliteDatabase;
+    use dlc_messages::oracle_msgs::EventDescriptor;
     use nostr_sdk::{Client, EventId, Keys};
+    use rand::Rng;
 
     use crate::sub_commands::dlc::{
-        nostr_events::{delete_all_dlc_offers, list_dlc_offers, lookup_announcement_event},
+        nostr_events::{delete_all_dlc_offers, list_dlc_offers},
         utils::oracle_announcement_from_str,
         DLC,
     };
 
-    #[test]
-    fn generate_nostr_key() {
-        let keys = Keys::generate();
-        println!("{}", keys.public_key());
-        println!("{}", keys.secret_key().unwrap());
+    const DEFAULT_WORK_DIR: &str = ".cdk-cli";
+    const MINT_URL: &str = "http://localhost:3338";
+
+    /// helper function to initialize wallets
+    async fn initialize_wallets() -> HashMap<UncheckedUrl, Wallet> {
+        let work_dir = {
+            let home_dir = home::home_dir().unwrap();
+            home_dir.join(DEFAULT_WORK_DIR)
+        };
+        let localstore: Arc<dyn WalletDatabase<Err = cdk_database::Error> + Send + Sync> = {
+            let sql_path = work_dir.join("cdk-cli.sqlite");
+            let sql = WalletSqliteDatabase::new(&sql_path).await.unwrap();
+
+            sql.migrate().await;
+
+            Arc::new(sql)
+        };
+
+        let seed_path = work_dir.join("seed");
+
+        let mnemonic = match fs::metadata(seed_path.clone()) {
+            Ok(_) => {
+                let contents = fs::read_to_string(seed_path.clone()).unwrap();
+                Mnemonic::from_str(&contents).unwrap()
+            }
+            Err(_e) => {
+                let mut rng = rand::thread_rng();
+                let random_bytes: [u8; 32] = rng.gen();
+
+                let mnemnic = Mnemonic::from_entropy(&random_bytes).unwrap();
+                tracing::info!("Using randomly generated seed you will not be able to restore");
+
+                mnemnic
+            }
+        };
+
+        let mut wallets: HashMap<UncheckedUrl, Wallet> = HashMap::new();
+
+        let mints = localstore.get_mints().await.unwrap();
+
+        for (mint, _) in mints {
+            let wallet = Wallet::new(
+                &mint.to_string(),
+                cdk::nuts::CurrencyUnit::Sat,
+                localstore.clone(),
+                &mnemonic.to_seed_normalized(""),
+                None,
+            );
+
+            wallets.insert(mint, wallet);
+        }
+        wallets
     }
 
     #[tokio::test]
     async fn test_create_and_post_offer() {
+        let wallets = initialize_wallets().await;
+        let wallet = match wallets.get(&UncheckedUrl::new(MINT_URL.to_string())) {
+            Some(wallet) => wallet.clone(),
+            None => todo!(),
+        };
         const ANNOUNCEMENT: &str = "ypyyyX6pdZUM+OovHftxK9StImd8F7nxmr/eTeyR/5koOVVe/EaNw1MAeJm8LKDV1w74Fr+UJ+83bVP3ynNmjwKbtJr9eP5ie2Exmeod7kw4uNsuXcw6tqJF1FXH3fTF/dgiOwAByEOAEd95715DKrSLVdN/7cGtOlSRTQ0/LsW/p3BiVOdlpccA/dgGDAACBDEyMzQENDU2NwR0ZXN0";
         let announcement = oracle_announcement_from_str(ANNOUNCEMENT);
         let announcement_id =
@@ -407,6 +550,7 @@ mod tests {
         let amount = 7;
         let _event_id = dlc
             .create_bet(
+                &wallet,
                 announcement,
                 announcement_id,
                 counterparty_keys.public_key(),

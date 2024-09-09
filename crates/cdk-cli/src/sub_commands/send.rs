@@ -108,6 +108,7 @@ pub async fn send(
                 refund_keys,
                 sub_command_args.required_sigs,
                 None,
+                None,
             )
             .unwrap();
 
@@ -142,6 +143,7 @@ pub async fn send(
                     pubkeys,
                     refund_keys,
                     sub_command_args.required_sigs,
+                    None,
                     None,
                 )
                 .unwrap();
