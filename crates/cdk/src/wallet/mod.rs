@@ -1749,7 +1749,7 @@ impl Wallet {
                 todo!()
             }
 
-            SpendingConditions::SCTConditions { data, conditions } => {
+            SpendingConditions::SCTConditions { data } => {
                 todo!()
             }
         };

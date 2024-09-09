@@ -1,6 +1,8 @@
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
 
+use crate::secret::Secret;
+
 pub fn sorted_merkle_hash(left: &[u8], right: &[u8]) -> [u8; 32] {
     // sort the inputs
     let (left, right) = if left < right {
@@ -40,4 +42,13 @@ pub fn merkle_verify(root: &[u8; 32], leaf_hash: &[u8; 32], proof: &[&[u8; 32]])
     }
 
     return h == root;
+}
+
+pub fn sct_root(secrets: Vec<Secret>) -> [u8; 32] {
+    let leaf_hashes: Vec<[u8; 32]> = secrets
+        .iter()
+        .map(|s| Sha256Hash::hash(&s.to_bytes()).to_byte_array())
+        .collect();
+
+    merkle_root(&leaf_hashes)
 }
