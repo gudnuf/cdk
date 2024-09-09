@@ -3,22 +3,37 @@ use std::{collections::HashMap, str::FromStr};
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
 
-use super::CurrencyUnit;
-use super::{nut00::token::TokenV3Token, nut01::PublicKey, Proofs};
+use super::nut00::Witness;
+use super::{nut00::token::TokenV3Token, nut01::PublicKey, Proof, Proofs};
+use super::{nut10, CurrencyUnit, Nut10Secret, SecretData};
 use crate::util::hex;
 use crate::Amount;
 use bitcoin::key::XOnlyPublicKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+pub mod serde_dlc_witness;
+
 #[derive(Debug, Error)]
 pub enum Error {}
 
 /// DLC Witness
-#[derive(Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DLCWitness {
-    /// Signatures
-    signatures: Vec<String>,
+    /// DLC Secret
+    pub dlc_secret: SecretData,
+}
+
+impl Proof {
+    pub fn add_dlc_witness(&mut self, dlc_secret: Nut10Secret) {
+        let secret_data = match dlc_secret.kind {
+            nut10::Kind::DLC => (dlc_secret.secret_data),
+            _ => todo!("this should error"),
+        };
+        self.witness = Some(Witness::DLCWitness(DLCWitness {
+            dlc_secret: secret_data,
+        }));
+    }
 }
 
 // Ti == SHA256(Ki_ || Pi)

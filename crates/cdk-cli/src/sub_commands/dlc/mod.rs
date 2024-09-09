@@ -1,12 +1,13 @@
 use core::panic;
 use std::collections::HashMap;
 use std::io::{self, stdin, Write};
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Error, Result};
 use cdk::amount::{Amount, SplitTarget};
 use cdk::nuts::nutdlc::{DLCLeaf, DLCRoot, DLCTimeoutLeaf, PayoutStructure};
-use cdk::nuts::{self, , TokenV3};
+use cdk::nuts::{self, Proofs, TokenV3};
 use cdk::secret;
 use cdk::url::UncheckedUrl;
 use cdk::wallet::Wallet;
@@ -35,7 +36,6 @@ use super::balance::mint_balances;
 
 pub mod nostr_events;
 pub mod utils;
-
 const RELAYS: [&str; 1] = ["wss://relay.damus.io"];
 
 #[derive(Args)]
@@ -58,14 +58,18 @@ pub enum DLCCommands {
     },
     DeleteOffers {
         key: String,
-    }, // AcceptBet {
-       //     // the event id of the offered bet
-       //     event_id: String,
-       // },
+    },
+    AcceptBet {
+        key: String,
+        // the event id of the offered bet
+        event_id: String,
+        // TODO: we should be able to get this from the event
+        counterparty_pubkey: String,
+    },
 }
 
 // I imagine this is what will be sent back and forth in the kind 8888 messages
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UserBet {
     pub id: i32,
     pub oracle_announcement: OracleAnnouncement,
@@ -74,8 +78,8 @@ pub struct UserBet {
     blinding_factor: String,
     dlc_root: String,
     timeout: u64,
-    amount: u64,
-    locked_ecash: Option<Vec<TokenV3>>,
+    amount: u64, // TODO: use the Amount type
+    locked_ecash: Vec<TokenV3>,
 
     payoutstructs: Vec<PayoutStructure>, // user_a dlc funding proofs
                                          // What other data needs to be passed around to create the contract?
@@ -139,14 +143,14 @@ impl DLC {
 
         let dlc_secret =
             nuts::nut10::Secret::new(nuts::Kind::DLC, dlc_root.to_string(), Some(dlc_conditions));
-        let dlc_secret = dlc_secret.try_into()?;
         // TODO: this will put the same secret into each proof.
         // I'm not sure if the mint will allow us to spend multiple proofs with the same backup secret
         // If not, we can use a p2pk backup, or new backup secret for each proof
         let backup_secret = secret::Secret::generate();
 
-        //
-        let sct_root = nuts::nutsct::sct_root(vec![dlc_secret, backup_secret.clone()]);
+        // NOTE: .try_into() converts Nut10Secret to Secret
+        let sct_root =
+            nuts::nutsct::sct_root(vec![dlc_secret.clone().try_into()?, backup_secret.clone()]);
 
         let sct_conditions = nuts::nut11::SpendingConditions::new_sct(sct_root);
 
@@ -158,7 +162,7 @@ impl DLC {
             .select_proofs_to_send(Amount::from(amount), available_proofs, include_fees)
             .await
             .unwrap();
-        let funding_proofs = wallet
+        let mut funding_proofs = wallet
             .swap(
                 Some(Amount::from(amount)),
                 SplitTarget::default(),
@@ -169,7 +173,9 @@ impl DLC {
             .await?
             .unwrap();
 
-        // TODO: encode this as a Token
+        for proof in &mut funding_proofs {
+            proof.add_dlc_witness(dlc_secret.clone());
+        }
 
         let token = cdk::nuts::nut00::TokenV3::new(
             UncheckedUrl::from("https://testnut.cashu.space"),
@@ -322,7 +328,7 @@ impl DLC {
             dlc_root: dlc_root.to_string(),
             timeout,
             amount,
-            locked_ecash: Some(vec![token]),
+            locked_ecash: vec![token],
             payoutstructs: vec![
                 winning_payout_structure,
                 winning_counterparty_payout_structure,
@@ -342,8 +348,57 @@ impl DLC {
         }
     }
 
-    pub async fn accept_bet(&self, event_id: EventId) -> Result<EventId, Error> {
-        todo!()
+    pub async fn accept_bet(
+        &self,
+        wallet: &Wallet,
+        bet: UserBet,
+        counterparty_pubkey: nostr_sdk::key::PublicKey,
+    ) -> Result<(), Error> {
+        let timeout_payout_structure = PayoutStructure::default_timeout(vec![
+            self.keys.public_key().to_string(),
+            counterparty_pubkey.to_string(),
+        ]);
+        let timeout_leaf = DLCTimeoutLeaf::new(&bet.timeout, &timeout_payout_structure);
+
+        // TODO: validate payout structures
+        // TODO: validate dlc_root
+
+        let (funding_token, backup_secret) = self
+            .create_funding_token(wallet, &DLCRoot::from_str(&bet.dlc_root)?, bet.amount)
+            .await?;
+
+        // TODO: backup the backup secret
+
+        let counterparty_funding_token = bet.locked_ecash.first().unwrap().clone();
+
+        /* extract proofs from both funding tokens */
+        let mut dlc_inputs: Proofs = Vec::new();
+        /* NOTE: TokenV4 has a publick proofs() method but TokenV3 does not */
+        if let Some((_, proofs)) = nuts::TokenV4::try_from(funding_token)?
+            .proofs()
+            .into_iter()
+            .next()
+        {
+            dlc_inputs.extend(proofs);
+        }
+        if let Some((_, proofs)) = nuts::TokenV4::try_from(counterparty_funding_token)?
+            .proofs()
+            .into_iter()
+            .next()
+        {
+            dlc_inputs.extend(proofs);
+        }
+
+        let dlc_registration = nuts::nutdlc::DLC {
+            dlc_root: bet.dlc_root,
+            funding_amount: Amount::from(bet.amount),
+            unit: nuts::CurrencyUnit::Sat,
+            inputs: dlc_inputs,
+        };
+
+        wallet.register_dlc(dlc_registration).await?;
+
+        Ok(())
     }
 }
 
@@ -455,6 +510,44 @@ pub async fn dlc(
             let bets = nostr_events::delete_all_dlc_offers(&keys, &dlc.nostr).await;
 
             println!("{:?}", bets);
+        }
+        DLCCommands::AcceptBet {
+            key,
+            event_id,
+            counterparty_pubkey,
+        } => {
+            let keys = Keys::parse(key).unwrap();
+            let event_id = EventId::from_hex(event_id).unwrap();
+            let counterparty_pubkey = PublicKey::from_hex(counterparty_pubkey).unwrap();
+
+            let dlc = DLC::new(keys.secret_key()?).await?;
+
+            let bet = nostr_events::list_dlc_offers(&keys, &dlc.nostr, Some(event_id))
+                .await
+                .unwrap()
+                .first()
+                .unwrap()
+                .clone();
+
+            /* let user pick which wallet to use */
+            let mints_amounts = mint_balances(wallets).await?;
+
+            println!("Enter a mint number to create a DLC offer for");
+
+            let mut user_input = String::new();
+            io::stdout().flush().unwrap();
+            stdin().read_line(&mut user_input)?;
+
+            let mint_number: usize = user_input.trim().parse()?;
+
+            if mint_number.gt(&(mints_amounts.len() - 1)) {
+                crate::bail!("Invalid mint number");
+            }
+
+            // TODO: wallet needs to be from same mint as bet
+            let wallet = mints_amounts[mint_number].0.clone();
+
+            dlc.accept_bet(&wallet, bet, counterparty_pubkey).await?;
         }
         _ => todo!(),
     }
