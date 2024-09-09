@@ -443,7 +443,7 @@ pub async fn dlc(
 
             let dlc = DLC::new(keys.secret_key()?).await?;
 
-            let bets = nostr_events::list_dlc_offers(&keys, &dlc.nostr).await;
+            let bets = nostr_events::list_dlc_offers(&keys, &dlc.nostr, None).await;
 
             println!("{:?}", bets);
         }
@@ -579,7 +579,7 @@ mod tests {
         client.add_relay(relay.to_string()).await.unwrap();
         client.connect().await;
 
-        let offers = list_dlc_offers(&counterparty_keys, &client) // error line 74:58 in nostr_events.rs
+        let offers = list_dlc_offers(&counterparty_keys, &client, None) // error line 74:58 in nostr_events.rs
             .await
             .unwrap(); // if event exists should unwrap to event
 

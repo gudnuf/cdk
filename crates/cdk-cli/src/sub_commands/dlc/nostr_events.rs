@@ -46,10 +46,18 @@ pub async fn lookup_announcement_event(
     Some(Ok(events.first().unwrap().clone()))
 }
 
-pub async fn list_dlc_offers(keys: &Keys, client: &Client) -> Option<Vec<UserBet>> {
-    let filter = Filter::new()
-        .kind(Kind::Custom(8888))
-        .pubkey(keys.public_key());
+pub async fn list_dlc_offers(
+    keys: &Keys,
+    client: &Client,
+    event_id: Option<EventId>,
+) -> Option<Vec<UserBet>> {
+    let filter = if let Some(event_id) = event_id {
+        Filter::new().id(event_id)
+    } else {
+        Filter::new()
+            .kind(Kind::Custom(8888))
+            .pubkey(keys.public_key())
+    };
     let events = client
         .get_events_of(vec![filter], None)
         .await
@@ -161,7 +169,7 @@ mod tests {
 
         println!("event id: {:?}", event_id.to_hex());
 
-        let offers = list_dlc_offers(&counterparty_privkey, &client)
+        let offers = list_dlc_offers(&counterparty_privkey, &client, None)
             .await
             .unwrap(); // error in line 74:58
 
