@@ -77,11 +77,11 @@ pub fn merkle_prove(leaf_hashes: Vec<[u8; 32]>, position: usize) -> Vec<[u8; 32]
 
     if position < split {
         let mut proof = merkle_prove(leaf_hashes[..split].to_vec(), position);
-        proof.append(&mut leaf_hashes[split..].to_vec());
+        proof.push(merkle_root(&leaf_hashes[split..]));
         return proof;
     } else {
         let mut proof = merkle_prove(leaf_hashes[split..].to_vec(), position - split);
-        proof.append(&mut leaf_hashes[..split].to_vec());
+        proof.push(merkle_root(&leaf_hashes[..split]));
         return proof;
     }
 }
@@ -112,6 +112,7 @@ mod tests {
 
     use super::*;
 
+    //https://github.com/cashubtc/nuts/blob/a86a4e8ce0b9a76ce9b242d6c2c2ab846b3e1955/tests/sct-tests.md.md
     #[test]
     fn test_secret_hash() {
         let s = "[\"P2PK\",{\"nonce\":\"ffd73b9125cc07cdbf2a750222e601200452316bf9a2365a071dd38322a098f0\",\"data\":\"028fab76e686161cc6daf78fea08ba29ce8895e34d20322796f35fec8e689854aa\",\"tags\":[[\"sigflag\",\"SIG_INPUTS\"]]}]";
@@ -128,7 +129,6 @@ mod tests {
 
         assert_eq!(hasher, expected_hash)
 
-        // leaf hash shoule equal b43b79ed408d4cc0aa75ad0a97ab21e357ff7ee027300fb573833c568431e808
     }
 
     #[test]
@@ -181,4 +181,107 @@ mod tests {
 
         assert_eq!(root, expected_root);
     }
+
+    #[test]
+    fn test_basic_merkle_proof() {
+        // Test merkle proof for tree with two nodes.  Proof should be other hash.
+        let hash1: [u8; 32] = [9; 32];
+        let hash2: [u8; 32] = [8; 32];
+        let leaf_hashes = vec!(hash1, hash2);
+        
+        let position = 0;
+        let proof = merkle_prove(leaf_hashes.clone(), position);
+        let expected_proof = vec!(hash2);
+        assert_eq!(proof, expected_proof);
+
+        let position = 1;
+        let proof = merkle_prove(leaf_hashes, position);
+        let expected_proof = vec!(hash1);
+        assert_eq!(proof, expected_proof);
+
+    }
+
+    #[test]
+    fn test_complex_merkle_proof() {
+        let s1: [u8; 32] =
+            hex::decode("b43b79ed408d4cc0aa75ad0a97ab21e357ff7ee027300fb573833c568431e808")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let s2: [u8; 32] =
+            hex::decode("6bad0d7d596cb9048754ee75daf13ee7e204c6e408b83ee67514369e3f8f3f96")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let s3: [u8; 32] =
+            hex::decode("8da10ed117cad5e89c6131198ffe271166d68dff9ce961ff117bd84297133b77")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let s4: [u8; 32] =
+            hex::decode("7ec5a236d308d2c2bf800d81d3e3df89cc98f4f937d0788c302d2754ba28166a")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let s5: [u8; 32] =
+            hex::decode("e19353a94d1aaf56b150b1399b33cd4ef4096b086665945fbe96bd72c22097a7")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let s6: [u8; 32] =
+            hex::decode("cc655b7103c8b999b3fc292484bcb5a526e2d0cbf951f17fd7670fc05b1ff947")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let s7: [u8; 32] =
+            hex::decode("009ea9fae527f7914096da1f1ce2480d2e4cfea62480afb88da9219f1c09767f")
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        let s8: [u8; 32] =
+            hex::decode("7a56977edf9c299c1cfb14dfbeb2ab28d7b3d44b3c9cc6b7854f8a58acb3407d")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let s9: [u8; 32] =
+            hex::decode("7de4c7c75c8082ed9a2124ce8f027ed9a60f2236b6f50c62748a220086ed367b")
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        let s10: [u8; 32] =
+            hex::decode("b43b79ed408d4cc0aa75ad0a97ab21e357ff7ee027300fb573833c568431e808")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let s11: [u8; 32] =
+            hex::decode("7de4c7c75c8082ed9a2124ce8f027ed9a60f2236b6f50c62748a220086ed367b")
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        
+
+        let leaf_hashes = &[s1, s2, s3, s4, s5, s6, s7];
+
+
+        let position = 0;
+        let proofs = merkle_prove(leaf_hashes.to_vec(), position);
+        let expected_proofs = [s8, s9].to_vec();
+        assert_eq!(proofs, expected_proofs);  
+
+        let position = 1;
+        let expected_proofs = [s3, s10, s11];
+        let proofs = merkle_prove(leaf_hashes.to_vec(), position);
+        assert_eq!(proofs, expected_proofs); 
+
+        let position = 2;
+        let expected_proofs = [s2, s10, s11];
+        let proofs = merkle_prove(leaf_hashes.to_vec(), position);
+        assert_eq!(proofs, expected_proofs); 
+    
+        
+    }
+
 }
