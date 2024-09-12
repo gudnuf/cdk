@@ -10,6 +10,7 @@ use cdk::nuts::nutdlc::{DLCLeaf, DLCRoot, DLCTimeoutLeaf, PayoutStructure};
 use cdk::nuts::{self, Proofs, TokenV3};
 use cdk::secret;
 use cdk::url::UncheckedUrl;
+use cdk::util::hex;
 use cdk::wallet::Wallet;
 use clap::{Args, Subcommand};
 use dlc::secp256k1_zkp::hashes::sha256;
@@ -150,11 +151,9 @@ impl DLC {
 
         // NOTE: .try_into() converts Nut10Secret to Secret
         let sct_root =
-            nuts::nutsct::sct_root(vec![dlc_secret.clone().try_into()?]);
+            nuts::nutsct::sct_root(vec![dlc_secret.clone().try_into()?, backup_secret.clone()]);
 
         let sct_conditions = nuts::nut11::SpendingConditions::new_sct(sct_root);
-
-        
 
         let available_proofs = wallet.get_proofs().await?;
 
@@ -175,11 +174,22 @@ impl DLC {
             .await?
             .unwrap();
 
+        let sct_leaf_hashes = nuts::nutsct::sct_leaf_hashes(vec![
+            dlc_secret.clone().try_into()?,
+            backup_secret.clone(),
+        ]);
 
+        let sct_proof = nuts::nutsct::merkle_prove(sct_leaf_hashes, 0);
+        let sct_proof = sct_proof
+            .iter()
+            .map(|h| hex::encode(h))
+            .collect::<Vec<String>>();
+
+        let dlc_secret: secret::Secret = dlc_secret.clone().try_into()?;
+        let dlc_secret = hex::encode(dlc_secret.to_bytes());
 
         for proof in &mut funding_proofs {
-            //Todo the second arg to this should be a list of hashes called the merkle proof and I dont know how to calc that.
-            proof.add_sct_witness(dlc_secret.clone(), vec!(sct_root)); 
+            proof.add_sct_witness(dlc_secret.clone(), sct_proof.clone());
         }
 
         let token = cdk::nuts::nut00::TokenV3::new(
