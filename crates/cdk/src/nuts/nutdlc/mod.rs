@@ -24,6 +24,8 @@ pub struct DLCWitness {
     pub dlc_secret: SecretData,
 }
 
+
+
 impl Proof {
     pub fn add_dlc_witness(&mut self, dlc_secret: Nut10Secret) {
         let secret_data = match dlc_secret.kind {

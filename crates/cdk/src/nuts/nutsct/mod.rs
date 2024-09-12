@@ -19,12 +19,12 @@ pub struct SpendingConditionTree {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SCTWitness {
-    leaf_secret: Secret,
+    leaf_secret: Nut10Secret,
     merkle_proof: Vec<[u8; 32]>,
 }
 
 impl Proof {
-    pub fn add_sct_witness(&mut self, leaf_secret: Secret, merkle_proof:Vec<[u8; 32]>) {
+    pub fn add_sct_witness(&mut self, leaf_secret: Nut10Secret, merkle_proof:Vec<[u8; 32]>) {
         
         self.witness = Some(Witness::SCTWitness(SCTWitness {
             leaf_secret,
@@ -75,6 +75,24 @@ pub fn merkle_verify(root: &[u8; 32], leaf_hash: &[u8; 32], proof: &[&[u8; 32]])
     return h == root;
 }
 
+pub fn merkle_prove(leaf_hashes: Vec<[u8; 32]>, position: usize) -> Vec<[u8; 32]> {
+    if leaf_hashes.len() <= 1{
+        return Vec::new()
+    }
+    let split = leaf_hashes.len() / 2;
+
+    if position < split {
+        let mut proof = merkle_prove(leaf_hashes[..split].to_vec(), position);
+        proof.append(&mut leaf_hashes[split..].to_vec());
+        return proof
+    }
+    else {
+        let mut proof = merkle_prove(leaf_hashes[split..].to_vec(), position-split);
+        proof.append(&mut leaf_hashes[..split].to_vec());
+        return proof
+    }
+}
+
 pub fn sct_root(secrets: Vec<Secret>) -> [u8; 32] {
     let leaf_hashes: Vec<[u8; 32]> = secrets
         .iter()
@@ -112,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_sct_root() {
-        let s1 :[u8; 32] = hex::decode("b43b79ed408d4cc0aa75ad0a97ab21e357ff7ee027300fb573833c568431e808").unwrap().try_into().unwrap();
+        let s1:[u8; 32] = hex::decode("b43b79ed408d4cc0aa75ad0a97ab21e357ff7ee027300fb573833c568431e808").unwrap().try_into().unwrap();
         let s2:[u8; 32] =hex::decode("6bad0d7d596cb9048754ee75daf13ee7e204c6e408b83ee67514369e3f8f3f96").unwrap().try_into().unwrap();
         let s3:[u8; 32] =hex::decode("8da10ed117cad5e89c6131198ffe271166d68dff9ce961ff117bd84297133b77").unwrap().try_into().unwrap();
         let s4:[u8; 32] =hex::decode("7ec5a236d308d2c2bf800d81d3e3df89cc98f4f937d0788c302d2754ba28166a").unwrap().try_into().unwrap();

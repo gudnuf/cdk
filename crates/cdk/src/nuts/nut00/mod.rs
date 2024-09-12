@@ -20,6 +20,7 @@ use crate::nuts::nut11::{serde_p2pk_witness, P2PKWitness};
 use crate::nuts::nut12::BlindSignatureDleq;
 use crate::nuts::nut14::{serde_htlc_witness, HTLCWitness};
 use crate::nuts::nutdlc::{serde_dlc_witness, DLCWitness};
+use crate::nuts::nutsct::{SCTWitness, serde_sct_witness};
 use crate::nuts::{Id, ProofDleq};
 use crate::secret::Secret;
 use crate::Amount;
@@ -148,9 +149,14 @@ pub enum Witness {
     /// DLC Witness
     #[serde(with = "serde_dlc_witness")]
     DLCWitness(DLCWitness),
+
+    //SCT Witness
+    #[serde(with = "serde_sct_witness")]  // TODO: change this to sct
+    SCTWitness(SCTWitness),
 }
 
 impl Witness {
+    
     /// Add signatures to [`Witness`]
     pub fn add_signatures(&mut self, signatues: Vec<String>) {
         match self {
@@ -163,6 +169,7 @@ impl Witness {
                 });
             }
             Self::DLCWitness(dlc_witness) => todo!(),
+            Witness::SCTWitness(_) => todo!(),
         }
     }
 
@@ -172,6 +179,7 @@ impl Witness {
             Self::P2PKWitness(witness) => Some(witness.signatures.clone()),
             Self::HTLCWitness(witness) => witness.signatures.clone(),
             Self::DLCWitness(witness) => todo!(),
+            Witness::SCTWitness(_) => todo!(),
         }
     }
 
@@ -181,6 +189,7 @@ impl Witness {
             Self::P2PKWitness(_witness) => None,
             Self::HTLCWitness(witness) => Some(witness.preimage.clone()),
             Self::DLCWitness(witness) => todo!(),
+            Witness::SCTWitness(_) => todo!(),
         }
     }
 }
