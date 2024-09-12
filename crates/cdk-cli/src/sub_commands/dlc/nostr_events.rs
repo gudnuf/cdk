@@ -120,7 +120,8 @@ mod tests {
                 .unwrap();
 
         let client = Client::new(&Keys::generate());
-        let relay = "wss://relay.damus.io";
+        //let relay = "wss://relay.damus.io";
+        let relay = "relay.nostrdice.com";
         client.add_relay(relay.to_string()).await.unwrap();
         client.connect().await;
         let event = lookup_announcement_event(announcement_id, &client)
@@ -161,7 +162,8 @@ mod tests {
         let event = create_dlc_msg_event(&keys, msg.clone(), &counterparty_pubkey).unwrap();
 
         let client = Client::new(&Keys::generate());
-        let relay = "wss://relay.damus.io";
+        //let relay = "wss://relay.damus.io";
+        let relay = "relay.nostrdice.com";
         client.add_relay(relay.to_string()).await.unwrap();
         client.connect().await;
 

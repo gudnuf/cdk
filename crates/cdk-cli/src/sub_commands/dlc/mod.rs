@@ -150,9 +150,11 @@ impl DLC {
 
         // NOTE: .try_into() converts Nut10Secret to Secret
         let sct_root =
-            nuts::nutsct::sct_root(vec![dlc_secret.clone().try_into()?, backup_secret.clone()]);
+            nuts::nutsct::sct_root(vec![dlc_secret.clone().try_into()?]);
 
         let sct_conditions = nuts::nut11::SpendingConditions::new_sct(sct_root);
+
+        
 
         let available_proofs = wallet.get_proofs().await?;
 
@@ -173,8 +175,11 @@ impl DLC {
             .await?
             .unwrap();
 
+
+
         for proof in &mut funding_proofs {
-            proof.add_dlc_witness(dlc_secret.clone());
+            //Todo the second arg to this should be a list of hashes called the merkle proof and I dont know how to calc that.
+            proof.add_sct_witness(dlc_secret.clone(), vec!(sct_root)); 
         }
 
         let token = cdk::nuts::nut00::TokenV3::new(
@@ -183,6 +188,8 @@ impl DLC {
             Some(String::from("dlc locking proofs")),
             None,
         )?;
+
+        println!("{:?}", funding_proofs);
 
         println!(
             "Funding proof secrets: {:?}",
