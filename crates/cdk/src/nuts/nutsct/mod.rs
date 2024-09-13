@@ -60,13 +60,14 @@ pub fn merkle_root(leaf_hashes: &[[u8; 32]]) -> [u8; 32] {
 }
 
 // see https://github.com/cashubtc/nuts/blob/a86a4e8ce0b9a76ce9b242d6c2c2ab846b3e1955/sct.md#merkle_verifyroot-bytes-leaf_hash-bytes-proof-listbytes---bool
-pub fn merkle_verify(root: &[u8; 32], leaf_hash: &[u8; 32], proof: &[&[u8; 32]]) -> bool {
-    let h = leaf_hash;
-    for branch_hash in proof {
-        let h = sorted_merkle_hash(h, *branch_hash);
+pub fn merkle_verify(root: &[u8; 32], leaf_hash: &[u8; 32], proof: &Vec<String>) -> bool {
+    let mut current_hash = *leaf_hash;
+    for branch_hash_hex in proof {
+        let branch_hash = crate::util::hex::decode(branch_hash_hex).expect("Invalid hex string");
+        current_hash = sorted_merkle_hash(&current_hash, &branch_hash);
     }
 
-    return h == root;
+    current_hash == *root
 }
 
 pub fn merkle_prove(leaf_hashes: Vec<[u8; 32]>, position: usize) -> Vec<[u8; 32]> {
@@ -98,7 +99,7 @@ pub fn sct_root(secrets: Vec<Secret>) -> [u8; 32] {
 pub fn sct_leaf_hashes(secrets: Vec<Secret>) -> Vec<[u8; 32]> {
     secrets
         .iter()
-        .map(|s| Sha256Hash::hash(&s.to_bytes()).to_byte_array())
+        .map(|s| Sha256Hash::hash(&s.as_bytes()).to_byte_array())
         .collect()
 }
 
@@ -128,7 +129,6 @@ mod tests {
                 .unwrap();
 
         assert_eq!(hasher, expected_hash)
-
     }
 
     #[test]
@@ -187,18 +187,27 @@ mod tests {
         // Test merkle proof for tree with two nodes.  Proof should be other hash.
         let hash1: [u8; 32] = [9; 32];
         let hash2: [u8; 32] = [8; 32];
-        let leaf_hashes = vec!(hash1, hash2);
-        
+        let leaf_hashes = vec![hash1, hash2];
+
         let position = 0;
         let proof = merkle_prove(leaf_hashes.clone(), position);
-        let expected_proof = vec!(hash2);
+        let expected_proof = vec![hash2];
         assert_eq!(proof, expected_proof);
 
         let position = 1;
-        let proof = merkle_prove(leaf_hashes, position);
-        let expected_proof = vec!(hash1);
+        let proof = merkle_prove(leaf_hashes.clone(), position);
+        let expected_proof = vec![hash1];
         assert_eq!(proof, expected_proof);
 
+        let proof = proof
+            .iter()
+            .map(|h| hex::encode(h))
+            .collect::<Vec<String>>();
+
+        let root = merkle_root(&leaf_hashes);
+
+        let valid = merkle_verify(&root, &leaf_hashes[1], &proof);
+        assert!(valid);
     }
 
     #[test]
@@ -261,27 +270,24 @@ mod tests {
                 .try_into()
                 .unwrap();
 
-        
-
         let leaf_hashes = &[s1, s2, s3, s4, s5, s6, s7];
-
 
         let position = 0;
         let proofs = merkle_prove(leaf_hashes.to_vec(), position);
         let expected_proofs = [s8, s9].to_vec();
-        assert_eq!(proofs, expected_proofs);  
+        assert_eq!(proofs, expected_proofs);
 
         let position = 1;
         let expected_proofs = [s3, s10, s11];
         let proofs = merkle_prove(leaf_hashes.to_vec(), position);
-        assert_eq!(proofs, expected_proofs); 
+        assert_eq!(proofs, expected_proofs);
 
         let position = 2;
         let expected_proofs = [s2, s10, s11];
         let proofs = merkle_prove(leaf_hashes.to_vec(), position);
-        assert_eq!(proofs, expected_proofs); 
-    
-        
-    }
+        assert_eq!(proofs, expected_proofs);
+        assert_eq!(proofs, expected_proofs);
 
+        assert_eq!(proofs, expected_proofs);
+    }
 }
