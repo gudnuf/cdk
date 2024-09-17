@@ -290,4 +290,153 @@ mod tests {
 
         assert_eq!(proofs, expected_proofs);
     }
+
+    //https://github.com/cashubtc/nuts/blob/a86a4e8ce0b9a76ce9b242d6c2c2ab846b3e1955/tests/sct-tests.md.md#proofs
+    #[test]
+    //test vector from docs
+    fn test_valid_sct() {
+        let s = "9becd3a8ce24b53beaf8ffb20a497b683b55f87ef87e3814be43a5768bcfe69fj";
+
+        let s1 = String::from("009ea9fae527f7914096da1f1ce2480d2e4cfea62480afb88da9219f1c09767f");
+        let s2 = String::from("2628c9759f0cecbb43b297b6eb0c268573d265730c2c9f6e194b4948f43d669d");
+        let s3 = String::from("7ea48b9a4ad58f92c4cfa8e006afa98b2b05ac1b4de481e13088d26f672d8edc");
+
+        let merkle_proof = vec![s1, s2, s3];
+
+        let root: [u8; 32] =
+            hex::decode("71655cac0c83c6949169bcd6c82b309810138895f83b967089ffd9f64d109306")
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        let leaf_hash = Sha256Hash::hash(s.as_bytes()).to_byte_array();
+
+        let b = merkle_verify(&root, &leaf_hash, &merkle_proof);
+        println!("{b}");
+
+        assert!(b);
+    }
+
+    #[test]
+    //test from SCT our program created
+    fn test_our_valid_sct() {
+        let s = "[\"DLC\",{\"nonce\":\"aea22dd7c80f0fc87b3ab66b7c910d21d5f27d63f0f0f8164e3dbceed25c7447\",\"data\":\"2c5da07a0542ef3731e254c006d1ecfea7cd951c11cea1c065a12c39e3b1f1a2\",\"tags\":[[\"sigflag\",\"SIG_INPUTS\"],[\"threshold\",\"1\"]]}]";
+
+        let s1 = String::from("80ebc929bcb51d0ac6ed24d9f9bbb6897494c5bf8c4a4dadad6dca772a1d865a");
+
+        let merkle_proof = vec![s1];
+
+        let root: [u8; 32] =
+            hex::decode("09682b8e375979e68189ff293cbe09038de1d67b5b5fa46961814dc8747d8a7b")
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        let leaf_hash = Sha256Hash::hash(s.as_bytes()).to_byte_array();
+
+        let b = merkle_verify(&root, &leaf_hash, &merkle_proof);
+
+        assert!(b);
+    }
+
+    //https://github.com/cashubtc/nuts/blob/a86a4e8ce0b9a76ce9b242d6c2c2ab846b3e1955/tests/sct-tests.md.md#invalid
+
+    #[test]
+    //test vector from docs
+    fn test_invalid_sct() {
+        let s = "9becd3a8ce24b53beaf8ffb20a497b683b55f87ef87e3814be43a5768bcfe69fj";
+
+        let s1 = String::from("db7a191c4f3c112d7eb3ae9ee8fa9bd940fc4fed6ada9ba9ab2f102c3e3bbe80");
+        let s2 = String::from("2628c9759f0cecbb43b297b6eb0c268573d265730c2c9f6e194b4948f43d669d");
+        let s3 = String::from("7ea48b9a4ad58f92c4cfa8e006afa98b2b05ac1b4de481e13088d26f672d8edc");
+
+        let merkle_proof = vec![s1, s2, s3];
+
+        let root: [u8; 32] =
+            hex::decode("71655cac0c83c6949169bcd6c82b309810138895f83b967089ffd9f64d109306")
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        let leaf_hash = Sha256Hash::hash(s.as_bytes()).to_byte_array();
+
+        let b = merkle_verify(&root, &leaf_hash, &merkle_proof);
+
+        assert_ne!(b, true);
+    }
+
+    #[test]
+    //test from SCT our program created
+    fn test_nutshell_info() {
+        let s = "[\"DLC\",{\"nonce\":\"54d5263c9282f22c494b38f2967c23ac54de26502606f2a98b734b318c115250\",\"data\":\"d87010e7e82070c94c28b5e2aedff3275e452b93e6af1fd74e4f4d535e1e35a3\",\"tags\":[[\"sigflag\",\"SIG_INPUTS\"],[\"threshold\",\"1\"]]}]";
+
+        let s1 = String::from("f737a46eaa37450285f9f9c7bafb653d9f6074614a9339a64a6307bd878b748c");
+
+        let merkle_proof = vec![s1];
+
+        let root: [u8; 32] =
+            hex::decode("345af1eee507016d86d66d022bde5225ab3ac15a183fbb64d8780ef394b2fcc1")
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        let leaf_hash = Sha256Hash::hash(s.as_bytes()).to_byte_array();
+
+        let b = merkle_verify(&root, &leaf_hash, &merkle_proof);
+
+        assert!(b);
+    }
 }
+
+/*
+Proof we created to test
+
+[
+
+
+Proof { amount: Amount(1),
+
+keyset_id: Id { version: Version00, id: [255, 212, 139, 143, 94, 207, 128] },
+
+secret: Secret("[\"SCT\",{\"nonce\":\"bebc21ceaccd4aa59c5f19ee98373f88916dc79e204979f0aee043ce0943e05c\",\"data\":\"09682b8e375979e68189ff293cbe09038de1d67b5b5fa46961814dc8747d8a7b\"}]"),
+
+c: PublicKey { inner: PublicKey(8a4fe273c7ddc7c25a0aeb52039cada076ae928ab04cbfbc1350d6702d7b2b05275ab6e3f3ad091057a2b7436931ad5802b82dced2b675a15025b09e9a878833) }, witness: Some(SCTWitness(SCTWitness { leaf_secret: "[\"DLC\",{\"nonce\":\"aea22dd7c80f0fc87b3ab66b7c910d21d5f27d63f0f0f8164e3dbceed25c7447\",\"data\":\"2c5da07a0542ef3731e254c006d1ecfea7cd951c11cea1c065a12c39e3b1f1a2\",\"tags\":[[\"sigflag\",\"SIG_INPUTS\"],[\"threshold\",\"1\"]]}]",
+
+merkle_proof: ["80ebc929bcb51d0ac6ed24d9f9bbb6897494c5bf8c4a4dadad6dca772a1d865a"] })),
+
+dleq: Some(ProofDleq { e: SecretKey { inner: SecretKey(#7564a3ed9461cbba) },
+
+s: SecretKey { inner: SecretKey(#4c853763f86d0058) },
+
+r: SecretKey { inner: SecretKey(#edb5053fca96a7f9) } }) },
+
+
+
+
+
+
+Proof {
+
+amount: Amount(4),
+
+
+keyset_id: Id { version: Version00, id: [255, 212, 139, 143, 94, 207, 128] },
+
+secret: Secret("[\"SCT\",{\"nonce\":\"d58333d05c1b0d6cd86c93a4b0aa54ba44488fee915439f861befd53bcdc5d6d\",\"data\":\"09682b8e375979e68189ff293cbe09038de1d67b5b5fa46961814dc8747d8a7b\"}]"),
+
+c: PublicKey { inner: PublicKey(21de97e2fbc742501fc20d79fa900a733c74f38f6298f2f78b8d71bf337d7d7042e99162fac27506ef040a10e9a9b76578f807d5a13c0090e5b0ced0483e1b8d) }, witness: Some(SCTWitness(SCTWitness { leaf_secret: "[\"DLC\",{\"nonce\":\"aea22dd7c80f0fc87b3ab66b7c910d21d5f27d63f0f0f8164e3dbceed25c7447\",\"data\":\"2c5da07a0542ef3731e254c006d1ecfea7cd951c11cea1c065a12c39e3b1f1a2\",\"tags\":[[\"sigflag\",\"SIG_INPUTS\"],[\"threshold\",\"1\"]]}]",
+
+merkle_proof: ["80ebc929bcb51d0ac6ed24d9f9bbb6897494c5bf8c4a4dadad6dca772a1d865a"] })),
+
+dleq: Some(ProofDleq { e: SecretKey { inner: SecretKey(#1aa35cc207c967ae) },
+
+s: SecretKey { inner: SecretKey(#1426c306e96c16a8) },
+
+r: SecretKey { inner: SecretKey(#ed2a1fc21398d714) } }) }
+
+
+]
+
+
+
+*/
