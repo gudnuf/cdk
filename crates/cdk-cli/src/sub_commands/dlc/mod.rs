@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::io::{self, stdin, Write};
 use std::str::FromStr;
 use std::time::Duration;
+use std::vec;
 
 use anyhow::{Error, Result};
 use cdk::amount::{Amount, SplitTarget};
@@ -150,10 +151,13 @@ impl DLC {
         let backup_secret = secret::Secret::generate();
 
         // NOTE: .try_into() converts Nut10Secret to Secret
-        let sct_root =
-            nuts::nutsct::sct_root(vec![dlc_secret.clone().try_into()?, backup_secret.clone()]);
+        let dlc_secret: secret::Secret = dlc_secret.clone().try_into()?;
+        println!("dlc_secret: {:?}", dlc_secret);
 
-        let sct_conditions = nuts::nut11::SpendingConditions::new_sct(sct_root);
+        let (sct_conditions, sct_proof) = nuts::nut11::SpendingConditions::new_dlc_sct(
+            vec![dlc_secret.clone(), backup_secret.clone()],
+            0,
+        );
 
         let available_proofs = wallet.get_proofs().await?;
 
@@ -163,6 +167,7 @@ impl DLC {
             .select_proofs_to_send(Amount::from(amount), available_proofs, include_fees)
             .await
             .unwrap();
+
         let mut funding_proofs = wallet
             .swap(
                 Some(Amount::from(amount)),
@@ -174,22 +179,8 @@ impl DLC {
             .await?
             .unwrap();
 
-        let sct_leaf_hashes = nuts::nutsct::sct_leaf_hashes(vec![
-            dlc_secret.clone().try_into()?,
-            backup_secret.clone(),
-        ]);
-
-        let sct_proof = nuts::nutsct::merkle_prove(sct_leaf_hashes, 0);
-        let sct_proof = sct_proof
-            .iter()
-            .map(|h| hex::encode(h))
-            .collect::<Vec<String>>();
-
-        let dlc_secret: secret::Secret = dlc_secret.clone().try_into()?;
-        let dlc_secret = hex::encode(dlc_secret.to_bytes());
-
         for proof in &mut funding_proofs {
-            proof.add_sct_witness(dlc_secret.clone(), sct_proof.clone());
+            proof.add_sct_witness(dlc_secret.to_string(), sct_proof.clone());
         }
 
         let token = cdk::nuts::nut00::TokenV3::new(
@@ -201,13 +192,13 @@ impl DLC {
 
         println!("{:?}", funding_proofs);
 
-        println!(
-            "Funding proof secrets: {:?}",
-            funding_proofs
-                .iter()
-                .map(|p| p.secret.to_string())
-                .collect::<Vec<String>>()
-        );
+        // println!(
+        //     "Funding proof secrets: {:?}",
+        //     funding_proofs
+        //         .iter()
+        //         .map(|p| p.secret.to_string())
+        //         .collect::<Vec<String>>()
+        // );
 
         Ok((token, backup_secret))
     }
@@ -586,6 +577,7 @@ mod tests {
     use nostr_sdk::{Client, EventId, Keys};
     use rand::Rng;
 
+    use super::*;
     use crate::sub_commands::dlc::{
         nostr_events::{delete_all_dlc_offers, list_dlc_offers},
         utils::oracle_announcement_from_str,
@@ -644,6 +636,61 @@ mod tests {
             wallets.insert(mint, wallet);
         }
         wallets
+    }
+
+    #[tokio::test]
+    async fn test_full_flow() {
+        let wallets = initialize_wallets().await;
+        let wallet = match wallets.get(&UncheckedUrl::new(MINT_URL.to_string())) {
+            Some(wallet) => wallet.clone(),
+            None => todo!(),
+        };
+        const ANNOUNCEMENT: &str = "ypyyyX6pdZUM+OovHftxK9StImd8F7nxmr/eTeyR/5koOVVe/EaNw1MAeJm8LKDV1w74Fr+UJ+83bVP3ynNmjwKbtJr9eP5ie2Exmeod7kw4uNsuXcw6tqJF1FXH3fTF/dgiOwAByEOAEd95715DKrSLVdN/7cGtOlSRTQ0/LsW/p3BiVOdlpccA/dgGDAACBDEyMzQENDU2NwR0ZXN0";
+        let announcement = oracle_announcement_from_str(ANNOUNCEMENT);
+        let announcement_id =
+            EventId::from_hex("d30e6c857a900ebefbf7dc3b678ead9215f4345476067e146ded973971286529")
+                .unwrap();
+        let alice_keys = Keys::generate();
+        let bob_keys = Keys::generate();
+
+        let alice_dlc = DLC::new(alice_keys.secret_key().unwrap()).await.unwrap();
+        let bob_dlc = DLC::new(bob_keys.secret_key().unwrap()).await.unwrap();
+
+        let descriptor = &announcement.oracle_event.event_descriptor;
+
+        let outcomes = match descriptor {
+            EventDescriptor::EnumEvent(ref e) => e.outcomes.clone(),
+            EventDescriptor::DigitDecompositionEvent(_) => unreachable!(),
+        };
+        let alice_outcome = &outcomes.clone()[0];
+
+        let amount = 7;
+        let offer_event_id = alice_dlc
+            .create_bet(
+                &wallet,
+                announcement,
+                announcement_id,
+                bob_keys.public_key(),
+                vec![alice_outcome.clone()],
+                amount,
+            )
+            .await
+            .unwrap();
+
+        let bet = nostr_events::list_dlc_offers(&bob_keys, &bob_dlc.nostr, Some(offer_event_id))
+            .await
+            .unwrap()
+            .first()
+            .unwrap()
+            .clone();
+
+        bob_dlc
+            .accept_bet(&wallet, bet, alice_keys.public_key())
+            .await
+            .unwrap();
+
+        nostr_events::delete_all_dlc_offers(&bob_keys, &bob_dlc.nostr).await;
+        nostr_events::delete_all_dlc_offers(&alice_keys, &alice_dlc.nostr).await;
     }
 
     #[tokio::test]

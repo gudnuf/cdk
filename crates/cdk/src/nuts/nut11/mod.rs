@@ -323,6 +323,29 @@ impl SpendingConditions {
         }
     }
 
+    pub fn new_dlc_sct(secrets: Vec<Secret>, secret_to_prove: usize) -> (Self, Vec<String>) {
+        let leaf_hashes = crate::nuts::nutsct::sct_leaf_hashes(secrets.clone());
+        let proof = crate::nuts::nutsct::merkle_prove(leaf_hashes.clone(), secret_to_prove);
+        let root = crate::nuts::nutsct::merkle_root(&leaf_hashes);
+
+        let expected_proof = vec![Sha256Hash::hash(&secrets[1].to_bytes()).to_byte_array()];
+        assert_eq!(proof, expected_proof);
+
+        let proof = proof
+            .iter()
+            .map(|h| hex::encode(h))
+            .collect::<Vec<String>>();
+
+        let valid =
+            crate::nuts::nutsct::merkle_verify(&root, &leaf_hashes[secret_to_prove], &proof);
+        println!("valid: {valid}");
+        assert!(valid);
+
+        let sct_conditions = SpendingConditions::new_sct(root);
+
+        (sct_conditions, proof)
+    }
+
     /// Kind of [SpendingConditions]
     pub fn kind(&self) -> Kind {
         match self {
