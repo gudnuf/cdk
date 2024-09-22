@@ -338,7 +338,6 @@ impl SpendingConditions {
 
         let valid =
             crate::nuts::nutsct::merkle_verify(&root, &leaf_hashes[secret_to_prove], &proof);
-        println!("valid: {valid}");
         assert!(valid);
 
         let sct_conditions = SpendingConditions::new_sct(root);

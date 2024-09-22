@@ -152,7 +152,6 @@ impl DLC {
 
         // NOTE: .try_into() converts Nut10Secret to Secret
         let dlc_secret: secret::Secret = dlc_secret.clone().try_into()?;
-        println!("dlc_secret: {:?}", dlc_secret);
 
         let (sct_conditions, sct_proof) = nuts::nut11::SpendingConditions::new_dlc_sct(
             vec![dlc_secret.clone(), backup_secret.clone()],
@@ -189,16 +188,6 @@ impl DLC {
             Some(String::from("dlc locking proofs")),
             None,
         )?;
-
-        println!("{:?}", funding_proofs);
-
-        // println!(
-        //     "Funding proof secrets: {:?}",
-        //     funding_proofs
-        //         .iter()
-        //         .map(|p| p.secret.to_string())
-        //         .collect::<Vec<String>>()
-        // );
 
         Ok((token, backup_secret))
     }
@@ -344,8 +333,6 @@ impl DLC {
         };
 
         let offer_dlc = serde_json::to_string(&offer_dlc)?;
-
-        println!("{:?}", offer_dlc);
 
         let offer_dlc_event =
             nostr_events::create_dlc_msg_event(&self.keys, offer_dlc, &counterparty_pubkey)?;

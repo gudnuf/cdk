@@ -1893,6 +1893,7 @@ impl Wallet {
             registrations: vec![dlc],
         };
 
+        // TODO: the matching on the response seems to always be `Success` even if there are errors
         let fund_dlc_response = match self
             .client
             .post_register_dlc(self.mint_url.clone().try_into()?, fund_dlc_request)
@@ -1904,6 +1905,9 @@ impl Wallet {
                 return Err(Error::Custom("Error registering DLC".to_string()));
             }
         };
+
+        // we are not properly catching the error, so if `funded` is empty, we know the registration failed
+        assert!(!fund_dlc_response.is_empty(), "DLC registration failed");
 
         for funded_dlc in fund_dlc_response {
             let dlc_root = funded_dlc.dlc_root;
