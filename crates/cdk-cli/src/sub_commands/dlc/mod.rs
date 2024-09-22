@@ -585,7 +585,7 @@ mod tests {
     };
 
     const DEFAULT_WORK_DIR: &str = ".cdk-cli";
-    const MINT_URL: &str = "http://localhost:3338";
+    const MINT_URL: &str = "https://testnut.brownduff.rocks";
 
     /// helper function to initialize wallets
     async fn initialize_wallets() -> HashMap<UncheckedUrl, Wallet> {
