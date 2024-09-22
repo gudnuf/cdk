@@ -24,8 +24,6 @@ pub struct DLCWitness {
     pub dlc_secret: SecretData,
 }
 
-
-
 impl Proof {
     pub fn add_dlc_witness(&mut self, dlc_secret: Nut10Secret) {
         let secret_data = match dlc_secret.kind {
@@ -161,26 +159,38 @@ pub struct PostDLCRegistrationRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct DLCRegistrationResponse {
-    pub funded: Vec<FundedDLC>,
-    pub errors: Option<Vec<DLCError>>,
+#[serde(untagged)]
+/// [`DLCRegistrationResponse`] can be either a success or an error
+pub enum DLCRegistrationResponse {
+    /// Success [`DLCRegistrationResponse`]
+    Success {
+        /// successfully [`FundedDLC`]s
+        funded: Vec<FundedDLC>,
+    },
+    /// Error [`DLCRegistrationResponse`]
+    Error {
+        /// successfully [`FundedDLC`]s
+        funded: Vec<FundedDLC>,
+        /// [`DLCError`]s for inputs that failed to register
+        errors: Vec<DLCError>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FundedDLC {
-    pub dlc_root: DLCRoot,
+    pub dlc_root: String,
     pub funding_proof: FundingProof,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FundingProof {
-    pub keyset: String,    // keyset_id_str
-    pub signature: String, // bip340_sig_hex
+    pub keyset: String,
+    pub signature: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DLCError {
-    pub dlc_root: DLCRoot,
+    pub dlc_root: String,
     pub bad_inputs: Vec<BadInput>,
 }
 

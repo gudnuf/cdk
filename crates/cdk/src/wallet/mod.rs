@@ -18,7 +18,7 @@ use crate::amount::SplitTarget;
 use crate::cdk_database::{self, WalletDatabase};
 use crate::dhke::{construct_proofs, hash_to_curve};
 use crate::nuts::nut00::token::Token;
-use crate::nuts::nutdlc::{PostDLCRegistrationRequest, DLC};
+use crate::nuts::nutdlc::{DLCRegistrationResponse, PostDLCRegistrationRequest, DLC};
 use crate::nuts::{
     nut10, nut12, Conditions, CurrencyUnit, Id, KeySetInfo, Keys, Kind, MeltQuoteBolt11Response,
     MeltQuoteState, MintInfo, MintQuoteBolt11Response, MintQuoteState, PreMintSecrets, PreSwap,
@@ -1893,12 +1893,19 @@ impl Wallet {
             registrations: vec![dlc],
         };
 
-        let fund_dlc_response = self
+        let fund_dlc_response = match self
             .client
             .post_register_dlc(self.mint_url.clone().try_into()?, fund_dlc_request)
-            .await?;
+            .await?
+        {
+            DLCRegistrationResponse::Success { funded } => funded,
+            DLCRegistrationResponse::Error { funded, errors } => {
+                tracing::error!("Error registering DLC: {:?}", errors);
+                return Err(Error::Custom("Error registering DLC".to_string()));
+            }
+        };
 
-        for funded_dlc in fund_dlc_response.funded {
+        for funded_dlc in fund_dlc_response {
             let dlc_root = funded_dlc.dlc_root;
             let funding_proof = funded_dlc.funding_proof;
             println!("Funded DLC: {:?}", dlc_root);
