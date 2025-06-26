@@ -141,6 +141,7 @@
             (craneLib.fileset.commonCargoSources ./crates/cdk-axum)
             (craneLib.fileset.commonCargoSources ./crates/cdk-cln)
             (craneLib.fileset.commonCargoSources ./crates/cdk-lnd)
+            (craneLib.fileset.commonCargoSources ./crates/cdk-strike)
             (craneLib.fileset.commonCargoSources ./crates/cdk-fake-wallet)
             (craneLib.fileset.commonCargoSources ./crates/cdk-lnbits)
             (craneLib.fileset.commonCargoSources ./crates/cdk-redb)
@@ -274,7 +275,7 @@
                 echo "Docker is available at $(which docker)"
                 echo "Docker version: $(docker --version)"
               '';
-              buildInputs = buildInputs ++ [ 
+              buildInputs = buildInputs ++ [
                 stable_toolchain
                 pkgs.docker-client
               ];
