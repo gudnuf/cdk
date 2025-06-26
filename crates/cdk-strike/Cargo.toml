@@ -1,0 +1,25 @@
+[package]
+name = "cdk-strike"
+version.workspace = true
+edition.workspace = true
+authors = ["CDK Developers"]
+license.workspace = true
+homepage = "https://github.com/cashubtc/cdk"
+repository = "https://github.com/cashubtc/cdk.git"
+rust-version.workspace = true # MSRV
+description = "CDK ln backend for Strike"
+readme = "README.md"
+
+[dependencies]
+async-trait.workspace = true
+anyhow.workspace = true
+cdk-common = { workspace = true, features = ["mint"] }
+futures.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+axum.workspace = true
+strike-rs = { git = "https://github.com/gudnuf/strike-rs.git", rev = "13bdba7a7059d8417d54758c24c97b34a0cc91e6"}

@@ -202,3 +202,39 @@ impl LnBackendSetup for config::GrpcProcessor {
         Ok(payment_processor)
     }
 }
+
+#[cfg(feature = "strike")]
+#[async_trait]
+impl LnBackendSetup for config::Strike {
+    async fn setup(
+        &self,
+        routers: &mut Vec<Router>,
+        settings: &Settings,
+        unit: CurrencyUnit,
+    ) -> anyhow::Result<cdk_strike::Strike> {
+        // Create a channel for webhook notifications
+        let (sender, receiver) = tokio::sync::mpsc::channel::<String>(100);
+        let receiver = std::sync::Arc::new(tokio::sync::Mutex::new(Some(receiver)));
+
+        // TODO: we only need a single webhook endpoint for all units
+        let webhook_endpoint = format!("/webhook/strike/{}/invoice", unit);
+        let mint_url: MintUrl = settings.info.url.parse()?;
+        let webhook_url = mint_url.join(&webhook_endpoint)?;
+
+        let strike = cdk_strike::Strike::new(
+            self.api_key.clone(),
+            unit,
+            receiver,
+            webhook_url.to_string(),
+        )
+        .await?;
+
+        let webhook_router = strike
+            .create_invoice_webhook(&webhook_endpoint, sender)
+            .await?;
+
+        routers.push(webhook_router);
+
+        Ok(strike)
+    }
+}

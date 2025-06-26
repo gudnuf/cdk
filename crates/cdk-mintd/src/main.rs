@@ -315,6 +315,35 @@ async fn main() -> anyhow::Result<()> {
                 mint_builder = mint_builder.add_supported_websockets(nut17_supported);
             }
         }
+        #[cfg(feature = "strike")]
+        LnBackend::Strike => {
+            let strike_settings = settings.clone().strike.expect("Strike config defined");
+
+            tracing::info!("Attempting to start with Strike backend.");
+
+            for unit in strike_settings.clone().supported_units {
+                tracing::debug!("Adding unit: {:?}", unit);
+
+                let strike_backend = strike_settings
+                    .setup(&mut ln_routers, &settings, unit.clone())
+                    .await?;
+
+                mint_builder = mint_builder
+                    .add_ln_backend(
+                        unit.clone(),
+                        PaymentMethod::Bolt11,
+                        mint_melt_limits,
+                        Arc::new(strike_backend),
+                    )
+                    .await?;
+                if let Some(input_fee) = settings.info.input_fee_ppk {
+                    mint_builder = mint_builder.set_unit_fee(&unit, input_fee)?;
+                }
+
+                let nut17_supported = SupportedMethods::default_bolt11(unit);
+                mint_builder = mint_builder.add_supported_websockets(nut17_supported);
+            }
+        }
         LnBackend::None => {
             tracing::error!(
                 "Pyament backend was not set or feature disabled. {:?}",
