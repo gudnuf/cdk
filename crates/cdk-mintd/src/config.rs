@@ -221,6 +221,40 @@ pub struct Database {
     pub engine: DatabaseEngine,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthType {
+    Clear,
+    Blind,
+}
+
+impl Default for AuthType {
+    fn default() -> Self {
+        AuthType::Blind
+    }
+}
+
+impl std::str::FromStr for AuthType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "clear" => Ok(AuthType::Clear),
+            "blind" => Ok(AuthType::Blind),
+            _ => Err(format!("Unknown auth type: {s}")),
+        }
+    }
+}
+
+impl From<AuthType> for cdk::nuts::AuthRequired {
+    fn from(value: AuthType) -> Self {
+        match value {
+            AuthType::Clear => cdk::nuts::AuthRequired::Clear,
+            AuthType::Blind => cdk::nuts::AuthRequired::Blind,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Auth {
     pub openid_discovery: String,
@@ -228,18 +262,40 @@ pub struct Auth {
     pub mint_max_bat: u64,
     #[serde(default = "default_true")]
     pub enabled_mint: bool,
+    #[serde(default)]
+    pub mint_auth_type: AuthType,
     #[serde(default = "default_true")]
     pub enabled_melt: bool,
+    #[serde(default)]
+    pub melt_auth_type: AuthType,
     #[serde(default = "default_true")]
     pub enabled_swap: bool,
+    #[serde(default)]
+    pub swap_auth_type: AuthType,
+    #[serde(default = "default_true")]
+    pub enabled_get_mint_quote: bool,
+    #[serde(default)]
+    pub get_mint_quote_auth_type: AuthType,
     #[serde(default = "default_true")]
     pub enabled_check_mint_quote: bool,
+    #[serde(default)]
+    pub check_mint_quote_auth_type: AuthType,
+    #[serde(default = "default_true")]
+    pub enabled_get_melt_quote: bool,
+    #[serde(default)]
+    pub get_melt_quote_auth_type: AuthType,
     #[serde(default = "default_true")]
     pub enabled_check_melt_quote: bool,
+    #[serde(default)]
+    pub check_melt_quote_auth_type: AuthType,
     #[serde(default = "default_true")]
     pub enabled_restore: bool,
+    #[serde(default)]
+    pub restore_auth_type: AuthType,
     #[serde(default = "default_true")]
     pub enabled_check_proof_state: bool,
+    #[serde(default)]
+    pub check_proof_state_auth_type: AuthType,
 }
 
 fn default_true() -> bool {

@@ -87,11 +87,23 @@ reserve_fee_min = 4
 # openid_client_id = "cashu-client"
 # mint_max_bat=50
 # enabled_mint=true
+# mint_auth_type="clear"
 # enabled_melt=true
+# melt_auth_type="clear"
 # enabled_swap=true
+# swap_auth_type="clear"
+# enabled_get_mint_quote=true
+# get_mint_quote_auth_type="clear"
 # enabled_check_mint_quote=true
+# check_mint_quote_auth_type="clear"
+# enabled_get_melt_quote=true
+# get_melt_quote_auth_type="clear"
 # enabled_check_melt_quote=true
+# check_melt_quote_auth_type="clear"
 # enabled_restore=true
+# restore_auth_type="clear"
+# enabled_check_proof_state=true
+# check_proof_state_auth_type="clear"
 
 # Example configuration for Strike backend
 # [strike]
