@@ -24,7 +24,8 @@ use futures::stream::StreamExt;
 use futures::Stream;
 use serde_json::Value;
 use strike_rs::{
-    Amount as StrikeAmount, Currency as StrikeCurrencyUnit, InvoiceRequest, InvoiceState,
+    Amount as StrikeAmount, Currency as StrikeCurrencyUnit, CurrencyExchangeQuoteRequest,
+    ExchangeAmount, FeePolicy, InvoiceQueryParams, InvoiceRequest, InvoiceState,
     PayInvoiceQuoteRequest, Strike as StrikeApi,
 };
 use tokio::sync::Mutex;
@@ -42,7 +43,6 @@ pub struct Strike {
     webhook_url: String,
     wait_invoice_cancel_token: CancellationToken,
     wait_invoice_is_active: Arc<AtomicBool>,
-    pending_invoices: Arc<Mutex<Vec<String>>>,
 }
 
 impl Strike {
@@ -67,7 +67,6 @@ impl Strike {
             webhook_url,
             wait_invoice_cancel_token: CancellationToken::new(),
             wait_invoice_is_active: Arc::new(AtomicBool::new(false)),
-            pending_invoices: Arc::new(Mutex::new(Vec::new())),
         })
     }
 }
@@ -110,6 +109,8 @@ impl MintPayment for Strike {
                 .await
                 .map_err(|e| Error::StrikeRs(e.to_string()))?;
         }
+
+        tracing::debug!("Created new subscription for webhook: {}", self.webhook_url);
 
         // Create new subscription
         self.strike_api
@@ -174,17 +175,18 @@ impl MintPayment for Strike {
         &self,
         request: &str,
         unit: &CurrencyUnit,
-        options: Option<MeltOptions>,
+        _: Option<MeltOptions>,
     ) -> Result<PaymentQuoteResponse, Self::Err> {
         let bolt11 = Bolt11Invoice::from_str(request)?;
+        let description = bolt11.description().to_string();
 
-        let amount_msat = match options {
-            Some(amount) => amount.amount_msat(),
-            None => bolt11
-                .amount_milli_satoshis()
-                .ok_or(Error::UnknownInvoiceAmount)?
-                .into(),
-        };
+        let correlation_id = description
+            .split("TXID:")
+            .nth(1)
+            .and_then(|txid_part| txid_part.split_whitespace().next())
+            .filter(|txid| !txid.is_empty());
+
+        tracing::debug!("Correlation ID: {:?}", correlation_id);
 
         if unit != &self.unit {
             tracing::warn!(
@@ -206,6 +208,122 @@ impl MintPayment for Strike {
             }
         };
 
+        let is_internal = if let Some(correlation_id) = correlation_id {
+            let query_params =
+                InvoiceQueryParams::new().filter(format!("correlationId eq '{}'", correlation_id));
+            let invoice_list = self.strike_api.get_invoices(Some(query_params)).await?;
+            tracing::debug!("Invoice list: {:?}", invoice_list);
+            !invoice_list.items.is_empty()
+        } else {
+            false
+        };
+
+        tracing::debug!("Is internal: {:?}", is_internal);
+
+        if is_internal {
+            tracing::debug!("Internal invoice found, processing internal payment");
+            let query_params = InvoiceQueryParams::new()
+                .filter(format!("correlationId eq '{}'", correlation_id.unwrap()));
+            let invoice_list = self.strike_api.get_invoices(Some(query_params)).await?;
+
+            if invoice_list.items.len() != 1 {
+                tracing::error!(
+                    "Expected exactly one internal invoice, found: {}",
+                    invoice_list.items.len()
+                );
+                return Err(Error::StrikeRs("Invalid internal invoice count".to_string()).into());
+            }
+
+            let internal_invoice = &invoice_list.items[0];
+
+            if internal_invoice.amount.currency == source_currency {
+                tracing::debug!("Internal invoice currency matches source currency");
+                let amount = from_strike_amount(internal_invoice.amount.clone(), unit)?;
+                return Ok(PaymentQuoteResponse {
+                    request_lookup_id: format!("internal:{}", correlation_id.unwrap()),
+                    amount: amount.into(),
+                    unit: self.unit.clone(),
+                    fee: Amount::ZERO,
+                    state: MeltQuoteState::Unpaid,
+                });
+            } else {
+                // Create currency exchange quote, but do not execute
+                tracing::info!(
+                    "Internal invoice currency ({:?}) does not match source currency ({:?}). Creating currency exchange quote.",
+                    internal_invoice.amount.currency,
+                    source_currency
+                );
+                let currency_to_sell = source_currency;
+                let currency_to_buy = internal_invoice.amount.currency.clone();
+                let amount_to_buy = internal_invoice.amount.clone();
+
+                let exchange_request = CurrencyExchangeQuoteRequest {
+                    sell: currency_to_sell.clone(),
+                    buy: currency_to_buy.clone(),
+                    amount: ExchangeAmount {
+                        amount: amount_to_buy.amount.to_string(),
+                        currency: amount_to_buy.currency,
+                        fee_policy: Some(FeePolicy::Exclusive),
+                    },
+                };
+
+                let quote = self
+                    .strike_api
+                    .create_currency_exchange_quote(exchange_request)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to create currency exchange quote: {}", e);
+                        Error::StrikeRs(e.to_string())
+                    })?;
+
+                tracing::info!("Created exchange quote: {}", quote.id);
+                tracing::info!(
+                    "Exchange rate: {} {} per {}",
+                    quote.conversion_rate.amount,
+                    quote.conversion_rate.target_currency,
+                    quote.conversion_rate.source_currency
+                );
+                tracing::debug!("Exchange quote: {:?}", quote);
+
+                // Use the quote's id as the request_lookup_id
+                let source_amount_str = quote.source.clone().amount;
+                let source_amount = source_amount_str
+                    .parse::<f64>()
+                    .map_err(|_| Error::StrikeRs("Invalid target amount format".to_string()))?;
+                let converted_amount = from_strike_amount(
+                    StrikeAmount {
+                        amount: source_amount,
+                        currency: currency_to_sell,
+                    },
+                    &self.unit,
+                )?;
+
+                let fee = if let Some(fee_info) = quote.fee.clone() {
+                    let fee_amount = fee_info
+                        .amount
+                        .parse::<f64>()
+                        .map_err(|_| Error::StrikeRs("Invalid fee amount format".to_string()))?;
+                    from_strike_amount(
+                        StrikeAmount {
+                            amount: fee_amount,
+                            currency: fee_info.currency,
+                        },
+                        &self.unit,
+                    )?
+                } else {
+                    0
+                };
+
+                return Ok(PaymentQuoteResponse {
+                    request_lookup_id: format!("exchange:{}", quote.id),
+                    amount: converted_amount.into(),
+                    unit: self.unit.clone(),
+                    fee: fee.into(),
+                    state: MeltQuoteState::Unpaid,
+                });
+            }
+        }
+
         let payment_quote_request = PayInvoiceQuoteRequest {
             ln_invoice: request.to_string(),
             source_currency,
@@ -219,12 +337,20 @@ impl MintPayment for Strike {
                 tracing::error!("Failed to get payment quote from Strike: {}", e);
                 Error::StrikeRs(e.to_string())
             })?;
+        let fee = if let Some(fee) = quote.lightning_network_fee {
+            from_strike_amount(fee, unit)?
+        } else {
+            tracing::warn!(
+                "No lightning network fee found for quote {}",
+                quote.payment_quote_id
+            );
+            0
+        };
 
-        let fee = from_strike_amount(quote.lightning_network_fee, unit)?;
         let amount = from_strike_amount(quote.amount, unit)?;
 
         let response = PaymentQuoteResponse {
-            request_lookup_id: quote.payment_quote_id,
+            request_lookup_id: format!("payment:{}", quote.payment_quote_id),
             amount: amount.into(),
             unit: self.unit.clone(),
             fee: fee.into(),
@@ -245,45 +371,88 @@ impl MintPayment for Strike {
             melt_quote.request_lookup_id
         );
 
-        let pay_response = self
-            .strike_api
-            .pay_quote(&melt_quote.request_lookup_id)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to pay quote via Strike: {}", e);
-                Error::StrikeRs(e.to_string())
-            })?;
-
-        let state = match pay_response.state {
-            InvoiceState::Paid => {
-                tracing::info!("Strike payment completed successfully");
-                MeltQuoteState::Paid
-            }
-            InvoiceState::Unpaid => {
-                tracing::warn!("Strike payment failed - unpaid");
-                MeltQuoteState::Unpaid
-            }
-            InvoiceState::Completed => {
-                tracing::info!("Strike payment completed");
-                MeltQuoteState::Paid
-            }
-            InvoiceState::Pending => {
-                tracing::info!("Strike payment is pending");
-                MeltQuoteState::Pending
-            }
+        // Parse label and id from request_lookup_id
+        let (label, id) = match melt_quote.request_lookup_id.split_once(":") {
+            Some((label, id)) => (label, id),
+            None => ("payment", melt_quote.request_lookup_id.as_str()), // fallback for legacy
         };
 
-        let total_spent = from_strike_amount(pay_response.total_amount, &melt_quote.unit)?.into();
+        match label {
+            "internal" => {
+                // Internal, same currency
+                let query_params =
+                    InvoiceQueryParams::new().filter(format!("correlationId eq '{}'", id));
+                let invoice_list = self.strike_api.get_invoices(Some(query_params)).await?;
+                if invoice_list.items.is_empty() {
+                    tracing::error!("No internal invoice found for id: {}", id);
+                    return Err(Error::StrikeRs("No internal invoice found".to_string()).into());
+                }
+                let internal_invoice = &invoice_list.items[0];
+                let total_spent =
+                    from_strike_amount(internal_invoice.amount.clone(), &melt_quote.unit)?.into();
+                return Ok(MakePaymentResponse {
+                    payment_lookup_id: melt_quote.request_lookup_id.clone(),
+                    payment_proof: None,
+                    status: MeltQuoteState::Paid,
+                    total_spent,
+                    unit: melt_quote.unit,
+                });
+            }
+            "exchange" => {
+                // Currency exchange
+                let (converted_amount, _fee) = self.execute_currency_exchange_by_id(id).await?;
+                return Ok(MakePaymentResponse {
+                    payment_lookup_id: melt_quote.request_lookup_id.clone(),
+                    payment_proof: None,
+                    status: MeltQuoteState::Paid, // or Pending if async
+                    total_spent: converted_amount.into(),
+                    unit: melt_quote.unit,
+                });
+            }
+            "payment" | _ => {
+                // Regular payment
+                let pay_response = self.strike_api.pay_quote(id).await.map_err(|e| {
+                    tracing::error!("Failed to pay quote via Strike: {}", e);
+                    Error::StrikeRs(e.to_string())
+                })?;
 
-        let response = MakePaymentResponse {
-            payment_lookup_id: pay_response.payment_id,
-            payment_proof: None,
-            status: state,
-            total_spent,
-            unit: melt_quote.unit,
-        };
+                let state = match pay_response.state {
+                    InvoiceState::Paid => {
+                        tracing::info!("Strike payment completed successfully");
+                        MeltQuoteState::Paid
+                    }
+                    InvoiceState::Unpaid => {
+                        tracing::warn!("Strike payment failed - unpaid");
+                        MeltQuoteState::Unpaid
+                    }
+                    InvoiceState::Completed => {
+                        tracing::info!("Strike payment completed");
+                        MeltQuoteState::Paid
+                    }
+                    InvoiceState::Pending => {
+                        tracing::info!("Strike payment is pending");
+                        MeltQuoteState::Pending
+                    }
+                    InvoiceState::Failed => {
+                        tracing::error!("Strike payment failed");
+                        MeltQuoteState::Failed
+                    }
+                };
 
-        Ok(response)
+                let total_spent =
+                    from_strike_amount(pay_response.total_amount, &melt_quote.unit)?.into();
+
+                let response = MakePaymentResponse {
+                    payment_lookup_id: pay_response.payment_id,
+                    payment_proof: None,
+                    status: state,
+                    total_spent,
+                    unit: melt_quote.unit,
+                };
+
+                Ok(response)
+            }
+        }
     }
 
     async fn create_incoming_payment_request(
@@ -293,20 +462,18 @@ impl MintPayment for Strike {
         description: String,
         unix_expiry: Option<u64>,
     ) -> Result<CreateIncomingPaymentResponse, Self::Err> {
-        tracing::info!("Creating incoming payment request via Strike");
-
         let time_now = unix_time();
         if let Some(expiry) = unix_expiry {
             assert!(expiry > time_now);
         }
-        let request_lookup_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
 
         let strike_amount = to_strike_unit(amount, unit)?;
 
         let invoice_request = InvoiceRequest {
-            correlation_id: Some(request_lookup_id.to_string()),
+            correlation_id: Some(correlation_id.to_string()),
             amount: strike_amount,
-            description: Some(description),
+            description: Some(format!("{} TXID:{}", description, correlation_id)),
         };
 
         let create_invoice_response = self
@@ -329,12 +496,6 @@ impl MintPayment for Strike {
 
         let request: Bolt11Invoice = quote.ln_invoice.parse()?;
         let expiry = request.expires_at().map(|t| t.as_secs());
-
-        // Add the invoice to the pending list for monitoring
-        {
-            let mut pending_list = self.pending_invoices.lock().await;
-            pending_list.push(create_invoice_response.invoice_id.clone());
-        }
 
         let response = CreateIncomingPaymentResponse {
             request_lookup_id: create_invoice_response.invoice_id,
@@ -370,6 +531,10 @@ impl MintPayment for Strike {
                 MintQuoteState::Paid
             }
             InvoiceState::Pending => MintQuoteState::Pending,
+            InvoiceState::Failed => {
+                tracing::error!("Incoming payment {} is failed", request_lookup_id);
+                MintQuoteState::Unpaid
+            }
         };
 
         Ok(state)
@@ -397,6 +562,10 @@ impl MintPayment for Strike {
                         MeltQuoteState::Paid
                     }
                     InvoiceState::Pending => MeltQuoteState::Pending,
+                    InvoiceState::Failed => {
+                        tracing::error!("Outgoing payment {} is failed", payment_id);
+                        MeltQuoteState::Failed
+                    }
                 };
 
                 let total_spent = from_strike_amount(invoice.total_amount, &self.unit)?.into();
@@ -441,6 +610,57 @@ impl Strike {
         self.strike_api
             .create_invoice_webhook_router(webhook_endpoint, sender)
             .await
+    }
+
+    /// Execute currency exchange for internal payment (by quote id only)
+    async fn execute_currency_exchange_by_id(&self, quote_id: &str) -> Result<(u64, u64), Error> {
+        tracing::info!("Executing currency exchange by quote id: {}", quote_id);
+        self.strike_api
+            .execute_currency_exchange_quote(quote_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to execute currency exchange: {}", e);
+                Error::StrikeRs(e.to_string())
+            })?;
+        // After execution, fetch the quote to get the amounts/fees
+        let quote = self
+            .strike_api
+            .get_currency_exchange_quote(quote_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to fetch currency exchange quote after execution: {}",
+                    e
+                );
+                Error::StrikeRs(e.to_string())
+            })?;
+        let source_amount_str = quote.source.clone().amount;
+        let source_amount = source_amount_str
+            .parse::<f64>()
+            .map_err(|_| Error::StrikeRs("Invalid target amount format".to_string()))?;
+        let converted_amount = from_strike_amount(
+            StrikeAmount {
+                amount: source_amount,
+                currency: quote.source.currency,
+            },
+            &self.unit,
+        )?;
+        let fee = if let Some(fee_info) = quote.fee.clone() {
+            let fee_amount = fee_info
+                .amount
+                .parse::<f64>()
+                .map_err(|_| Error::StrikeRs("Invalid fee amount format".to_string()))?;
+            from_strike_amount(
+                StrikeAmount {
+                    amount: fee_amount,
+                    currency: fee_info.currency,
+                },
+                &self.unit,
+            )?
+        } else {
+            0
+        };
+        Ok((converted_amount, fee))
     }
 }
 
