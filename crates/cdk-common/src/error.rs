@@ -461,6 +461,11 @@ impl From<Error> for ErrorResponse {
                 error: Some(err.to_string()),
                 detail: None,
             },
+            Error::IssuedQuote => ErrorResponse {
+                code: ErrorCode::TokensAlreadyIssued,
+                error: Some(err.to_string()),
+                detail: None,
+            },
             Error::ClearAuthRequired => ErrorResponse {
                 code: ErrorCode::ClearAuthRequired,
                 error: None,

@@ -2,7 +2,7 @@
 
 use std::env;
 
-use crate::config::{Auth, AuthType};
+use crate::config::Auth;
 
 pub const ENV_AUTH_OPENID_DISCOVERY: &str = "CDK_MINTD_AUTH_OPENID_DISCOVERY";
 pub const ENV_AUTH_OPENID_CLIENT_ID: &str = "CDK_MINTD_AUTH_OPENID_CLIENT_ID";
@@ -144,7 +144,8 @@ impl Auth {
             }
         }
 
-        if let Ok(check_proof_state_auth_type_str) = env::var(ENV_AUTH_CHECK_PROOF_STATE_AUTH_TYPE) {
+        if let Ok(check_proof_state_auth_type_str) = env::var(ENV_AUTH_CHECK_PROOF_STATE_AUTH_TYPE)
+        {
             if let Ok(auth_type) = check_proof_state_auth_type_str.parse() {
                 self.check_proof_state_auth_type = auth_type;
             }

@@ -416,6 +416,8 @@ impl Mint {
         melt_quote: &MeltQuote,
         melt_request: &MeltRequest<Uuid>,
     ) -> Result<Option<Amount>, Error> {
+        tracing::debug!("Handling internal melt mint for quote: {:?}", melt_quote);
+
         let mint_quote = match tx.get_mint_quote_by_request(&melt_quote.request).await {
             Ok(Some(mint_quote)) => mint_quote,
             // Not an internal melt -> mint
@@ -439,7 +441,8 @@ impl Mint {
 
         let mut mint_quote = mint_quote;
 
-        if mint_quote.amount > inputs_amount_quote_unit {
+        // NOTE: this chcnage makes it so that the melt quote determines the number of inputs required
+        if melt_quote.amount > inputs_amount_quote_unit {
             tracing::debug!(
                 "Not enough inuts provided: {} needed {}",
                 inputs_amount_quote_unit,
