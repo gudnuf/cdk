@@ -407,7 +407,7 @@ impl Mint {
                 err
             })?;
 
-        let settled_internally_amount = self
+        let internal_payment_result = self
             .handle_internal_melt_mint(&mut tx, &quote, melt_request)
             .await
             .map_err(|err| {
@@ -415,8 +415,44 @@ impl Mint {
                 err
             })?;
 
-        let (tx, preimage, amount_spent_quote_unit, quote) = match settled_internally_amount {
-            Some(amount_spent) => (tx, None, amount_spent, quote),
+        let (tx, preimage, amount_spent_quote_unit, quote) = match internal_payment_result {
+            Some(payment_result) => {
+                // Check if payment lookup id changed during internal payment
+                if payment_result.payment_lookup_id != quote.request_lookup_id {
+                    tracing::info!(
+                        "Payment lookup id changed during internal payment from {} to {}",
+                        quote.request_lookup_id,
+                        payment_result.payment_lookup_id
+                    );
+
+                    let mut updated_quote = quote;
+                    updated_quote.request_lookup_id = payment_result.payment_lookup_id;
+
+                    if let Err(err) = tx
+                        .update_melt_quote_request_lookup_id(
+                            &updated_quote.id,
+                            &updated_quote.request_lookup_id,
+                        )
+                        .await
+                    {
+                        tracing::warn!("Could not update payment lookup id: {}", err);
+                    }
+
+                    (
+                        tx,
+                        payment_result.payment_proof,
+                        payment_result.total_spent,
+                        updated_quote,
+                    )
+                } else {
+                    (
+                        tx,
+                        payment_result.payment_proof,
+                        payment_result.total_spent,
+                        quote,
+                    )
+                }
+            }
 
             None => {
                 // If the quote unit is SAT or MSAT we can check that the expected fees are
@@ -462,12 +498,16 @@ impl Mint {
                         if pay.status == MeltQuoteState::Unknown
                             || pay.status == MeltQuoteState::Failed =>
                     {
-                        let check_response =
-                            if let Ok(ok) = check_payment_state(Arc::clone(ln), &quote).await {
-                                ok
-                            } else {
-                                return Err(Error::Internal);
-                            };
+                        let mut melt_quote = quote.clone();
+                        melt_quote.request_lookup_id = pay.payment_lookup_id;
+
+                        let check_response = if let Ok(ok) =
+                            check_payment_state(Arc::clone(ln), &melt_quote).await
+                        {
+                            ok
+                        } else {
+                            return Err(Error::Internal);
+                        };
 
                         if check_response.status == MeltQuoteState::Paid {
                             tracing::warn!("Pay invoice returned {} but check returned {}. Proofs stuck as pending", pay.status.to_string(), check_response.status.to_string());
@@ -486,6 +526,14 @@ impl Mint {
                         if matches!(err, cdk_payment::Error::InvoiceAlreadyPaid) {
                             tracing::debug!("Invoice already paid, resetting melt quote");
                             return Err(Error::RequestAlreadyPaid);
+                        }
+                        // TODO: handle this error better
+                        if matches!(
+                            err.to_string().as_str(),
+                            "Strike error: Could not execute payment quote"
+                        ) {
+                            tracing::debug!("Quote probably expired, resetting melt quote");
+                            return Err(Error::ExpiredQuote(0, 0));
                         }
 
                         tracing::error!("Error returned attempting to pay: {} {}", quote.id, err);
@@ -530,7 +578,7 @@ impl Mint {
                 // Note: this should never fail since these conversions happen earlier and would fail there.
                 // Since it will not fail and even if it does the ln payment has already been paid, proofs should still be burned
                 let amount_spent =
-                    to_unit(pre.total_spent, &pre.unit, &quote.unit).unwrap_or_default();
+                    to_unit(pre.total_spent, &pre.unit, &quote.clone().unit).unwrap_or_default();
 
                 let payment_lookup_id = pre.payment_lookup_id;
                 let mut tx = self.localstore.begin_transaction().await?;

@@ -9,6 +9,7 @@ use cdk_common::common::{PaymentProcessorKey, QuoteTTL};
 use cdk_common::database::MintAuthDatabase;
 use cdk_common::database::{self, MintDatabase, MintTransaction};
 use cdk_common::nuts::{self, BlindSignature, BlindedMessage, CurrencyUnit, Id, Kind};
+use cdk_common::payment::MakePaymentResponse;
 use cdk_common::secret;
 use cdk_signatory::signatory::{Signatory, SignatoryKeySet};
 use futures::StreamExt;
@@ -415,7 +416,7 @@ impl Mint {
         tx: &mut Box<dyn MintTransaction<'_, cdk_database::Error> + Send + Sync + '_>,
         melt_quote: &MeltQuote,
         melt_request: &MeltRequest<Uuid>,
-    ) -> Result<Option<Amount>, Error> {
+    ) -> Result<Option<MakePaymentResponse>, Error> {
         let mint_quote = match tx.get_mint_quote_by_request(&melt_quote.request).await {
             Ok(Some(mint_quote)) => mint_quote,
             // Not an internal melt -> mint
@@ -437,24 +438,43 @@ impl Mint {
             Error::AmountOverflow
         })?;
 
-        let mut mint_quote = mint_quote;
-
-        if mint_quote.amount > inputs_amount_quote_unit {
+        // NOTE: this change makes it so that the melt quote determines the number of inputs required
+        // This is needed for when currencies do not match
+        if melt_quote.amount > inputs_amount_quote_unit {
             tracing::debug!(
                 "Not enough inuts provided: {} needed {}",
                 inputs_amount_quote_unit,
-                mint_quote.amount
+                melt_quote.amount
             );
             return Err(Error::InsufficientFunds);
         }
 
+        // --- Internal settlement: call make_payment on backend ---
+        // TODO: add an optional settle internally payment method
+        let backend = self.get_payment_processor(melt_quote.unit.clone(), PaymentMethod::Bolt11)?;
+        let payment_result = backend
+            .make_payment(melt_quote.clone(), None, Some(melt_quote.fee_reserve))
+            .await
+            .map_err(|e| {
+                tracing::error!("Internal settlement make_payment failed: {:?}", e);
+                Error::ExpiredQuote(0, 0) // TODO: handle different error cases, this is just because most likely this fails because the currency exchange quote is expired
+            })?;
+
+        if payment_result.status != MeltQuoteState::Paid {
+            tracing::error!(
+                "Internal settlement make_payment did not return Paid status: {:?}",
+                payment_result.status
+            );
+            return Err(Error::PaymentFailed);
+        }
+
+        tracing::debug!("Successfully settled internally: melt_quote.id: {}, payment_result.payment_lookup_id: {} and mint_quote.id: {}, mint_quote.request_lookup_id: {}", melt_quote.id, payment_result.payment_lookup_id, mint_quote.id, mint_quote.request_lookup_id);
+
+        // Payment successful - update mint quote state to paid
+        let mut mint_quote = mint_quote;
         mint_quote.state = MintQuoteState::Paid;
-
-        let amount = melt_quote.amount;
-
         tx.add_or_replace_mint_quote(mint_quote).await?;
-
-        Ok(Some(amount))
+        Ok(Some(payment_result))
     }
 
     /// Restore
