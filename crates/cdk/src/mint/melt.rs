@@ -605,13 +605,6 @@ impl Mint {
         tx.update_melt_quote_state(melt_request.quote(), MeltQuoteState::Paid)
             .await?;
 
-        self.pubsub_manager.melt_quote_status(
-            &quote,
-            payment_preimage.clone(),
-            None,
-            MeltQuoteState::Paid,
-        );
-
         let mut change = None;
 
         // Check if there is change to return
@@ -676,6 +669,13 @@ impl Mint {
                 change = Some(change_sigs);
             }
         }
+
+        self.pubsub_manager.melt_quote_status(
+            &quote,
+            payment_preimage.clone(),
+            change.clone(),
+            MeltQuoteState::Paid,
+        );
 
         proof_writer.commit();
         tx.commit().await?;
