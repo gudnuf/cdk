@@ -39,6 +39,7 @@ use cdk_axum::cache::HttpCache;
 #[cfg(feature = "management-rpc")]
 use cdk_mint_rpc::MintRPCServer;
 use cdk_mintd::cli::CLIArgs;
+use cdk_mintd::config::AuthType;
 use cdk_mintd::config::{self, DatabaseEngine, LnBackend};
 use cdk_mintd::env_vars::ENV_WORK_DIR;
 use cdk_mintd::setup::LnBackendSetup;
@@ -51,7 +52,6 @@ use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
-use cdk_mintd::config::AuthType;
 #[cfg(feature = "swagger")]
 use utoipa::OpenApi;
 
@@ -447,7 +447,6 @@ async fn main() -> anyhow::Result<()> {
 
         protected_endpoints.insert(mint_blind_auth_endpoint, AuthRequired::Clear);
 
-        let mut blind_auth_endpoints: Vec<ProtectedEndpoint> = vec![];
         let mut unprotected_endpoints = vec![];
 
         {
@@ -455,7 +454,7 @@ async fn main() -> anyhow::Result<()> {
                 cdk::nuts::Method::Post,
                 cdk::nuts::RoutePath::MintQuoteBolt11,
             );
-            
+
             if auth_settings.enabled_get_mint_quote {
                 let auth_required = auth_settings.get_mint_quote_auth_type.into();
                 protected_endpoints.insert(mint_quote_protected_endpoint, auth_required);
@@ -467,7 +466,7 @@ async fn main() -> anyhow::Result<()> {
         {
             let mint_protected_endpoint =
                 ProtectedEndpoint::new(cdk::nuts::Method::Post, cdk::nuts::RoutePath::MintBolt11);
-            
+
             if auth_settings.enabled_mint {
                 let auth_required = auth_settings.mint_auth_type.into();
                 protected_endpoints.insert(mint_protected_endpoint, auth_required);
@@ -517,7 +516,7 @@ async fn main() -> anyhow::Result<()> {
                     AuthType::Clear => AuthRequired::Clear,
                     AuthType::Blind => AuthRequired::Blind,
                 };
-                
+
                 protected_endpoints.insert(swap_protected_endpoint, auth_required);
             } else {
                 unprotected_endpoints.push(swap_protected_endpoint);
@@ -535,7 +534,7 @@ async fn main() -> anyhow::Result<()> {
                     AuthType::Clear => AuthRequired::Clear,
                     AuthType::Blind => AuthRequired::Blind,
                 };
-                
+
                 protected_endpoints.insert(check_mint_protected_endpoint, auth_required);
             } else {
                 unprotected_endpoints.push(check_mint_protected_endpoint);
@@ -553,7 +552,7 @@ async fn main() -> anyhow::Result<()> {
                     AuthType::Clear => AuthRequired::Clear,
                     AuthType::Blind => AuthRequired::Blind,
                 };
-                
+
                 protected_endpoints.insert(check_melt_protected_endpoint, auth_required);
             } else {
                 unprotected_endpoints.push(check_melt_protected_endpoint);
@@ -569,7 +568,7 @@ async fn main() -> anyhow::Result<()> {
                     AuthType::Clear => AuthRequired::Clear,
                     AuthType::Blind => AuthRequired::Blind,
                 };
-                
+
                 protected_endpoints.insert(restore_protected_endpoint, auth_required);
             } else {
                 unprotected_endpoints.push(restore_protected_endpoint);
@@ -585,7 +584,7 @@ async fn main() -> anyhow::Result<()> {
                     AuthType::Clear => AuthRequired::Clear,
                     AuthType::Blind => AuthRequired::Blind,
                 };
-                
+
                 protected_endpoints.insert(state_protected_endpoint, auth_required);
             } else {
                 unprotected_endpoints.push(state_protected_endpoint);
