@@ -108,6 +108,4 @@ reserve_fee_min = 4
 # Example configuration for Strike backend
 # [strike]
 # api_key = "your_strike_api_key_here"
-# webhook_url = "https://your-mint-domain.com/webhook/strike/invoice"
-# webhook_secret = "your_webhook_secret_here"
 # supported_units = ["sat", "usd"]

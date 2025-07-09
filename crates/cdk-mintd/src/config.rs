@@ -193,8 +193,6 @@ pub struct GrpcProcessor {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Strike {
     pub api_key: String,
-    pub webhook_url: String,
-    pub webhook_secret: String,
     pub supported_units: Vec<CurrencyUnit>,
 }
 

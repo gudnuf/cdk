@@ -1,5 +1,6 @@
 //! Error for Strike ln backend
 
+use strike_rs::Error as StrikeRsError;
 use thiserror::Error;
 
 /// Strike Error
@@ -11,9 +12,12 @@ pub enum Error {
     /// Unknown invoice
     #[error("Unknown invoice")]
     UnknownInvoice,
+    /// Unsupported unit
+    #[error("Unsupported unit")]
+    UnsupportedUnit,
     /// Strike-rs error
-    #[error("Strike error: {0}")]
-    StrikeRs(String),
+    #[error(transparent)]
+    StrikeRs(#[from] StrikeRsError),
     /// Anyhow error
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),

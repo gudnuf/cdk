@@ -3,10 +3,12 @@
 #![warn(missing_docs)]
 #![warn(rustdoc::bare_urls)]
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
@@ -37,12 +39,36 @@ pub mod error;
 /// Strike
 #[derive(Clone)]
 pub struct Strike {
+    // API client and configuration
     strike_api: StrikeApi,
     unit: CurrencyUnit,
-    receiver: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<String>>>>,
     webhook_url: String,
+    // Invoice state and communication
+    receiver: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<String>>>>,
     wait_invoice_cancel_token: CancellationToken,
     wait_invoice_is_active: Arc<AtomicBool>,
+    pending_invoices: Arc<Mutex<HashMap<String, u64>>>, // invoice_id -> creation_time // NOTE: these were added for polling
+}
+
+impl std::fmt::Debug for Strike {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Strike")
+            .field("unit", &self.unit)
+            .field("webhook_url", &self.webhook_url)
+            .field(
+                "wait_invoice_is_active",
+                &self.wait_invoice_is_active.load(Ordering::SeqCst),
+            )
+            .field(
+                "pending_invoices_count",
+                &self
+                    .pending_invoices
+                    .try_lock()
+                    .map(|m| m.len())
+                    .unwrap_or(0),
+            )
+            .finish()
+    }
 }
 
 impl Strike {
@@ -53,10 +79,7 @@ impl Strike {
         receiver: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<String>>>>,
         webhook_url: String,
     ) -> Result<Self, Error> {
-        let strike = StrikeApi::new(&api_key, None).map_err(|e| {
-            tracing::error!("Failed to create Strike API client: {}", e);
-            Error::StrikeRs(e.to_string())
-        })?;
+        let strike = StrikeApi::new(&api_key, None).map_err(Error::from)?;
 
         tracing::info!("Successfully created Strike backend");
 
@@ -67,7 +90,33 @@ impl Strike {
             webhook_url,
             wait_invoice_cancel_token: CancellationToken::new(),
             wait_invoice_is_active: Arc::new(AtomicBool::new(false)),
+            pending_invoices: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    /// Lookup an invoice by correlation id. Returns the first invoice if found, or an error if not found.
+    async fn lookup_invoice_by_correlation_id(
+        &self,
+        correlation_id: &str,
+    ) -> Result<strike_rs::InvoiceListItem, Error> {
+        let query_params = InvoiceQueryParams::new()
+            .filter(strike_rs::Filter::eq("correlationId", correlation_id));
+        let invoice_list = self
+            .strike_api
+            .get_invoices(Some(query_params))
+            .await
+            .map_err(Error::from)?;
+        let invoice = invoice_list.items.first().cloned();
+        match invoice {
+            Some(inv) => Ok(inv),
+            None => {
+                tracing::error!("No invoice found for correlation id: {}", correlation_id);
+                Err(Error::Anyhow(anyhow!(
+                    "No invoice found for correlation id: {}",
+                    correlation_id
+                )))
+            }
+        }
     }
 }
 
@@ -99,24 +148,16 @@ impl MintPayment for Strike {
     async fn wait_any_incoming_payment(
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = String> + Send>>, Self::Err> {
-        let subscriptions = self.strike_api.get_current_subscriptions().await?;
+        // let subscriptions = self.strike_api.get_current_subscriptions().await.map_err(Error::from)?;
 
-        // TODO: instead of deleting, the existing subscriptions should be used and the secret should be updated
-        // Delete any existing subscriptions
-        for subscription in subscriptions {
-            self.strike_api
-                .delete_subscription(&subscription.id)
-                .await
-                .map_err(|e| Error::StrikeRs(e.to_string()))?;
-        }
-
-        tracing::debug!("Created new subscription for webhook: {}", self.webhook_url);
-
-        // Create new subscription
-        self.strike_api
-            .subscribe_to_invoice_webhook(self.webhook_url.clone())
-            .await
-            .map_err(|e| Error::StrikeRs(e.to_string()))?;
+        // // TODO: instead of deleting, the existing subscriptions should be used and the secret should be updated
+        // // Delete any existing subscriptions
+        // for subscription in subscriptions {
+        //     self.strike_api
+        //         .delete_subscription(&subscription.id)
+        //         .await
+        //         .map_err(|e| Error::StrikeRs(e.to_string()))?;
+        // }
 
         let receiver = self
             .receiver
@@ -127,48 +168,158 @@ impl MintPayment for Strike {
 
         let strike_api = self.strike_api.clone();
         let cancel_token = self.wait_invoice_cancel_token.clone();
+        let pending_invoices = Arc::clone(&self.pending_invoices);
+        let is_active = Arc::clone(&self.wait_invoice_is_active);
 
-        Ok(futures::stream::unfold(
-            (
-                receiver,
-                strike_api,
-                cancel_token,
-                Arc::clone(&self.wait_invoice_is_active),
-            ),
-            |(mut receiver, strike_api, cancel_token, is_active)| async move {
-                tokio::select! {
-
-                    _ = cancel_token.cancelled() => {
-                        // Stream is cancelled
-                        is_active.store(false, Ordering::SeqCst);
-                        tracing::info!("Waiting for Strike invoice ending");
-                        None
-                    }
-
-                    msg_option = receiver.recv() => {
-                match msg_option {
-                    Some(msg) => {
-                        let check = strike_api.get_incoming_invoice(&msg).await;
-
-                        match check {
-                            Ok(invoice) => {
-                                if invoice.state == InvoiceState::Paid {
-                                    Some((msg, (receiver, strike_api, cancel_token, is_active)))
-                                } else {
-                                    None
+        // Try to create new subscription, but if it fails, just log and continue with polling
+        match self
+            .strike_api
+            .subscribe_to_invoice_webhook(self.webhook_url.clone())
+            .await
+        {
+            Ok(_) => {
+                tracing::debug!("Created new subscription for webhook: {}", self.webhook_url);
+                // Only use the receiver stream, no polling
+                let stream = futures::stream::unfold(
+                    (receiver, cancel_token, is_active),
+                    |(mut receiver, cancel_token, is_active)| async move {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => {
+                                is_active.store(false, Ordering::SeqCst);
+                                tracing::info!("Waiting for Strike invoice ending (webhook only mode)");
+                                None
+                            }
+                            msg_option = receiver.recv() => {
+                                match msg_option {
+                                    Some(msg) => Some((msg, (receiver, cancel_token, is_active))),
+                                    None => None,
                                 }
                             }
-                            _ => None,
                         }
+                    },
+                )
+                .filter_map(|item| async move {
+                    if item.is_empty() {
+                        None
+                    } else {
+                        Some(item)
                     }
-                    None => None,
-                }
+                })
+                .boxed();
+                Ok(stream)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create Strike webhook subscription (falling back to polling only): {}", e);
+                // Fallback to polling stream as before
+                Ok(futures::stream::unfold(
+                    (
+                        receiver,
+                        strike_api,
+                        cancel_token,
+                        is_active,
+                        pending_invoices,
+                        tokio::time::Instant::now(),
+                    ),
+                    |(mut receiver, strike_api, cancel_token, is_active, pending_invoices, mut last_poll)| async move {
+                        // Set up a 10-second polling interval
+                        let poll_interval = Duration::from_secs(10);
+                        let mut poll_timer = tokio::time::interval_at(last_poll + poll_interval, poll_interval);
+                        poll_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => {
+                                // Stream is cancelled
+                                is_active.store(false, Ordering::SeqCst);
+                                tracing::info!("Waiting for Strike invoice ending");
+                                None
+                            }
+
+                            msg_option = receiver.recv() => {
+                                match msg_option {
+                                    Some(msg) => {
+                                        let check = strike_api.get_incoming_invoice(&msg).await;
+
+                                        match check {
+                                            Ok(invoice) => {
+                                                if invoice.state == InvoiceState::Paid {
+                                                    // Remove from pending invoices if it was there
+                                                    {
+                                                        let mut pending = pending_invoices.lock().await;
+                                                        pending.remove(&msg);
+                                                    }
+                                                    Some((msg, (receiver, strike_api, cancel_token, is_active, pending_invoices, last_poll)))
+                                                } else {
+                                                    Some((String::new(), (receiver, strike_api, cancel_token, is_active, pending_invoices, last_poll)))
+                                                }
+                                            }
+                                            _ => Some((String::new(), (receiver, strike_api, cancel_token, is_active, pending_invoices, last_poll)))
+                                        }
+                                    }
+                                    None => Some((String::new(), (receiver, strike_api, cancel_token, is_active, pending_invoices, last_poll)))
+                                }
+                            }
+
+                            _ = poll_timer.tick() => {
+                                last_poll = tokio::time::Instant::now();
+
+                                // Poll all pending invoices
+                                let mut invoices_to_check = Vec::new();
+                                {
+                                    let pending = pending_invoices.lock().await;
+                                    for (invoice_id, _creation_time) in pending.iter() {
+                                        invoices_to_check.push(invoice_id.clone());
+                                    }
+                                }
+
+                                for invoice_id in invoices_to_check {
+                                    match strike_api.get_incoming_invoice(&invoice_id).await {
+                                        Ok(invoice) => {
+                                            if invoice.state == InvoiceState::Paid {
+                                                tracing::info!("Polling detected paid invoice: {}", invoice_id);
+                                                // Remove from pending invoices
+                                                {
+                                                    let mut pending = pending_invoices.lock().await;
+                                                    pending.remove(&invoice_id);
+                                                }
+                                                return Some((invoice_id, (receiver, strike_api, cancel_token, is_active, pending_invoices, last_poll)));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Error polling invoice {}: {}", invoice_id, e);
+                                            // Remove errored invoices from pending list to avoid repeated errors
+                                            {
+                                                let mut pending = pending_invoices.lock().await;
+                                                pending.remove(&invoice_id);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Clean up old invoices (older than 24 hours)
+                                let current_time = unix_time();
+                                let twenty_four_hours = 24 * 60 * 60;
+                                {
+                                    let mut pending = pending_invoices.lock().await;
+                                    pending.retain(|_invoice_id, creation_time| {
+                                        current_time - *creation_time < twenty_four_hours
+                                    });
+                                }
+
+                                Some((String::new(), (receiver, strike_api, cancel_token, is_active, pending_invoices, last_poll)))
+                            }
+                        }
+                    },
+                )
+                .filter_map(|item| async move {
+                    if item.is_empty() {
+                        None
+                    } else {
+                        Some(item)
                     }
-                }
-            },
-        )
-        .boxed())
+                })
+                .boxed())
+            }
+        }
     }
 
     async fn get_payment_quote(
@@ -216,34 +367,21 @@ impl MintPayment for Strike {
             }
         };
 
-        let is_internal = if let Some(correlation_id) = correlation_id {
-            let query_params =
-                InvoiceQueryParams::new().filter(format!("correlationId eq '{}'", correlation_id));
-            let invoice_list = self.strike_api.get_invoices(Some(query_params)).await?;
-            !invoice_list.items.is_empty()
+        let internal_invoice = if let Some(correlation_id) = correlation_id {
+            Some(
+                self.lookup_invoice_by_correlation_id(correlation_id)
+                    .await?,
+            )
         } else {
-            false
+            None
         };
 
-        if is_internal {
+        if let Some(internal_invoice) = internal_invoice {
             tracing::info!("Internal invoice found, processing internal payment");
-            let query_params = InvoiceQueryParams::new()
-                .filter(format!("correlationId eq '{}'", correlation_id.unwrap()));
-            let invoice_list = self.strike_api.get_invoices(Some(query_params)).await?;
-
-            if invoice_list.items.len() != 1 {
-                tracing::error!(
-                    "Expected exactly one internal invoice, found: {}",
-                    invoice_list.items.len()
-                );
-                return Err(Error::StrikeRs("Invalid internal invoice count".to_string()).into());
-            }
-
-            let internal_invoice = &invoice_list.items[0];
 
             if internal_invoice.amount.currency == source_currency {
                 tracing::debug!("Internal invoice currency matches source currency");
-                let amount = from_strike_amount(internal_invoice.amount.clone(), unit)?;
+                let amount = Strike::from_strike_amount(internal_invoice.amount.clone(), unit)?;
                 return Ok(PaymentQuoteResponse {
                     request_lookup_id: format!("internal:{}", correlation_id.unwrap()),
                     amount: amount.into(),
@@ -276,10 +414,7 @@ impl MintPayment for Strike {
                     .strike_api
                     .create_currency_exchange_quote(exchange_request)
                     .await
-                    .map_err(|e| {
-                        tracing::error!("Failed to create currency exchange quote: {}", e);
-                        Error::StrikeRs(e.to_string())
-                    })?;
+                    .map_err(Error::from)?;
 
                 tracing::debug!(
                     "Created currency exchange quote details - ID: {}, Created: {}, Valid until: {}, Source: {} {}, Target: {} {}, Fee: {:?}, Rate: {} {} per {}, State: {:?}",
@@ -297,31 +432,16 @@ impl MintPayment for Strike {
                     quote.state
                 );
 
-                // Use the quote's id as the request_lookup_id
-                let source_amount_str = quote.source.clone().amount;
-                let source_amount = source_amount_str
-                    .parse::<f64>()
-                    .map_err(|_| Error::StrikeRs("Invalid target amount format".to_string()))?;
-                let converted_amount = from_strike_amount(
-                    StrikeAmount {
-                        amount: source_amount,
-                        currency: currency_to_sell,
-                    },
-                    &self.unit,
-                )?;
+                let converted_amount =
+                    Strike::from_strike_amount(quote.source.clone(), &self.unit)?;
 
                 let fee = if let Some(fee_info) = quote.fee.clone() {
-                    let fee_amount = fee_info
-                        .amount
-                        .parse::<f64>()
-                        .map_err(|_| Error::StrikeRs("Invalid fee amount format".to_string()))?;
-                    from_strike_amount(
-                        StrikeAmount {
-                            amount: fee_amount,
-                            currency: fee_info.currency,
-                        },
-                        &self.unit,
-                    )?
+                    if Strike::currency_unit_eq_strike(&self.unit, &fee_info.currency) {
+                        Strike::from_strike_amount(fee_info.clone(), &self.unit)?
+                    } else {
+                        // Convert fee to self.unit using the quote's conversion rate
+                        Strike::convert_fee_to_unit(fee_info, &self.unit, quote.conversion_rate)?
+                    }
                 } else {
                     0
                 };
@@ -345,12 +465,9 @@ impl MintPayment for Strike {
             .strike_api
             .payment_quote(payment_quote_request)
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to get payment quote from Strike: {}", e);
-                Error::StrikeRs(e.to_string())
-            })?;
+            .map_err(Error::from)?;
         let fee = if let Some(fee) = quote.lightning_network_fee {
-            from_strike_amount(fee, unit)?
+            Strike::from_strike_amount(fee, unit)?
         } else {
             tracing::warn!(
                 "No lightning network fee found for quote {}",
@@ -359,7 +476,7 @@ impl MintPayment for Strike {
             0
         };
 
-        let amount = from_strike_amount(quote.amount, unit)?;
+        let amount = Strike::from_strike_amount(quote.amount, unit)?;
 
         let response = PaymentQuoteResponse {
             request_lookup_id: format!("payment:{}", quote.payment_quote_id),
@@ -392,16 +509,13 @@ impl MintPayment for Strike {
         match label {
             "internal" => {
                 // Internal, same currency
-                let query_params =
-                    InvoiceQueryParams::new().filter(format!("correlationId eq '{}'", id));
-                let invoice_list = self.strike_api.get_invoices(Some(query_params)).await?;
-                if invoice_list.items.is_empty() {
-                    tracing::error!("No internal invoice found for id: {}", id);
-                    return Err(Error::StrikeRs("No internal invoice found".to_string()).into());
-                }
-                let internal_invoice = &invoice_list.items[0];
+                let internal_invoice = self
+                    .lookup_invoice_by_correlation_id(id)
+                    .await
+                    .map_err(Error::from)?;
                 let total_spent =
-                    from_strike_amount(internal_invoice.amount.clone(), &melt_quote.unit)?.into();
+                    Strike::from_strike_amount(internal_invoice.amount.clone(), &melt_quote.unit)?
+                        .into();
                 return Ok(MakePaymentResponse {
                     payment_lookup_id: melt_quote.request_lookup_id.clone(),
                     payment_proof: None,
@@ -423,11 +537,7 @@ impl MintPayment for Strike {
             }
             "payment" | _ => {
                 // Regular payment
-                let pay_response = self.strike_api.pay_quote(id).await.map_err(|e| {
-                    tracing::error!("Failed to pay quote via Strike: {}", e);
-
-                    Error::StrikeRs(e.to_string())
-                })?;
+                let pay_response = self.strike_api.pay_quote(id).await.map_err(Error::from)?;
 
                 let state = match pay_response.state {
                     InvoiceState::Paid => {
@@ -453,7 +563,7 @@ impl MintPayment for Strike {
                 };
 
                 let total_spent =
-                    from_strike_amount(pay_response.total_amount, &melt_quote.unit)?.into();
+                    Strike::from_strike_amount(pay_response.total_amount, &melt_quote.unit)?.into();
 
                 let response = MakePaymentResponse {
                     payment_lookup_id: pay_response.payment_id,
@@ -481,7 +591,7 @@ impl MintPayment for Strike {
         }
         let correlation_id = Uuid::new_v4();
 
-        let strike_amount = to_strike_unit(amount, unit)?;
+        let strike_amount = Strike::to_strike_unit(amount, unit)?;
 
         let invoice_request = InvoiceRequest {
             correlation_id: Some(correlation_id.to_string()),
@@ -493,19 +603,13 @@ impl MintPayment for Strike {
             .strike_api
             .create_invoice(invoice_request)
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to create invoice via Strike: {}", e);
-                Error::StrikeRs(e.to_string())
-            })?;
+            .map_err(Error::from)?;
 
         let quote = self
             .strike_api
             .invoice_quote(&create_invoice_response.invoice_id)
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to get invoice quote from Strike: {}", e);
-                Error::StrikeRs(e.to_string())
-            })?;
+            .map_err(Error::from)?;
 
         let request: Bolt11Invoice = quote.ln_invoice.parse()?;
         let expiry = request.expires_at().map(|t| t.as_secs());
@@ -515,6 +619,12 @@ impl MintPayment for Strike {
             request: quote.ln_invoice,
             expiry,
         };
+
+        // Store the invoice ID for polling
+        {
+            let mut pending_invoices = self.pending_invoices.lock().await;
+            pending_invoices.insert(create_invoice_response.invoice_id, time_now);
+        }
 
         tracing::info!("Successfully created incoming payment request");
         Ok(response)
@@ -528,10 +638,7 @@ impl MintPayment for Strike {
             .strike_api
             .get_incoming_invoice(request_lookup_id)
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to get incoming invoice from Strike: {}", e);
-                Error::StrikeRs(e.to_string())
-            })?;
+            .map_err(Error::from)?;
 
         let state = match invoice.state {
             InvoiceState::Paid => {
@@ -571,22 +678,10 @@ impl MintPayment for Strike {
         match label {
             "internal" => {
                 // Internal payment - check invoice by correlation ID
-                let query_params =
-                    InvoiceQueryParams::new().filter(format!("correlationId eq '{}'", id));
-                let invoice_list = self.strike_api.get_invoices(Some(query_params)).await?;
-
-                if invoice_list.items.is_empty() {
-                    tracing::warn!("No internal invoice found for id: {}", id);
-                    return Ok(MakePaymentResponse {
-                        payment_lookup_id: payment_lookup_id.to_string(),
-                        payment_proof: None,
-                        status: MeltQuoteState::Unknown,
-                        total_spent: Amount::ZERO,
-                        unit: self.unit.clone(),
-                    });
-                }
-
-                let internal_invoice = &invoice_list.items[0];
+                let internal_invoice = self
+                    .lookup_invoice_by_correlation_id(id)
+                    .await
+                    .map_err(Error::from)?;
                 let state = match internal_invoice.state {
                     InvoiceState::Paid => {
                         tracing::info!("Internal payment {} is paid", id);
@@ -608,7 +703,7 @@ impl MintPayment for Strike {
                 };
 
                 let total_spent =
-                    from_strike_amount(internal_invoice.amount.clone(), &self.unit)?.into();
+                    Strike::from_strike_amount(internal_invoice.amount.clone(), &self.unit)?.into();
 
                 Ok(MakePaymentResponse {
                     payment_lookup_id: payment_lookup_id.to_string(),
@@ -624,10 +719,7 @@ impl MintPayment for Strike {
                     .strike_api
                     .get_currency_exchange_quote(id)
                     .await
-                    .map_err(|e| {
-                        tracing::error!("Error checking exchange quote: {}", e);
-                        Error::StrikeRs(e.to_string())
-                    })?;
+                    .map_err(Error::from)?;
 
                 let state = match quote.state {
                     ExchangeQuoteState::Completed => MeltQuoteState::Paid,
@@ -636,19 +728,8 @@ impl MintPayment for Strike {
                     ExchangeQuoteState::Pending => MeltQuoteState::Pending,
                 };
 
-                let source_amount_str = quote.source.clone().amount;
-                let source_amount = source_amount_str
-                    .parse::<f64>()
-                    .map_err(|_| Error::StrikeRs("Invalid source amount format".to_string()))?;
-
-                let total_spent = from_strike_amount(
-                    StrikeAmount {
-                        amount: source_amount,
-                        currency: quote.source.currency,
-                    },
-                    &self.unit,
-                )?
-                .into();
+                let total_spent =
+                    Strike::from_strike_amount(quote.source.clone(), &self.unit)?.into();
 
                 Ok(MakePaymentResponse {
                     payment_lookup_id: payment_lookup_id.to_string(),
@@ -685,7 +766,7 @@ impl MintPayment for Strike {
                         };
 
                         let total_spent =
-                            from_strike_amount(invoice.total_amount, &self.unit)?.into();
+                            Strike::from_strike_amount(invoice.total_amount, &self.unit)?.into();
 
                         MakePaymentResponse {
                             payment_lookup_id: payment_lookup_id.to_string(),
@@ -708,7 +789,7 @@ impl MintPayment for Strike {
                         }
                         _ => {
                             tracing::error!("Error checking outgoing payment: {}", err);
-                            return Err(Error::StrikeRs(err.to_string()).into());
+                            return Err(Error::from(err).into());
                         }
                     },
                 };
@@ -733,48 +814,39 @@ impl Strike {
 
     /// Execute currency exchange for internal payment (by quote id only)
     async fn execute_currency_exchange_by_id(&self, quote_id: &str) -> Result<(u64, u64), Error> {
-        self.strike_api
+        match self
+            .strike_api
             .execute_currency_exchange_quote(quote_id)
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to execute currency exchange: {}", e);
-                Error::StrikeRs(e.to_string())
-            })?;
+        {
+            Ok(_) => (),
+            Err(strike_rs::Error::ApiError(api_error)) => {
+                if api_error
+                    .is_error_code(&strike_rs::StrikeErrorCode::CurrencyExchangeQuoteExpired)
+                {
+                    tracing::warn!("Currency exchange quote {} has expired", quote_id);
+                    return Err(Error::Anyhow(anyhow!(
+                        "Currency exchange quote has expired"
+                    )));
+                } else {
+                    return Err(strike_rs::Error::ApiError(api_error).into());
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
         // After execution, fetch the quote to get the amounts/fees
         let quote = self
             .strike_api
             .get_currency_exchange_quote(quote_id)
             .await
-            .map_err(|e| {
-                tracing::error!(
-                    "Failed to fetch currency exchange quote after execution: {}",
-                    e
-                );
-                Error::StrikeRs(e.to_string())
-            })?;
-        let source_amount_str = quote.source.clone().amount;
-        let source_amount = source_amount_str
-            .parse::<f64>()
-            .map_err(|_| Error::StrikeRs("Invalid target amount format".to_string()))?;
-        let converted_amount = from_strike_amount(
-            StrikeAmount {
-                amount: source_amount,
-                currency: quote.source.currency,
-            },
-            &self.unit,
-        )?;
+            .map_err(Error::from)?;
+        let converted_amount = Strike::from_strike_amount(quote.source.clone(), &self.unit)?;
         let fee = if let Some(fee_info) = quote.fee.clone() {
-            let fee_amount = fee_info
-                .amount
-                .parse::<f64>()
-                .map_err(|_| Error::StrikeRs("Invalid fee amount format".to_string()))?;
-            from_strike_amount(
-                StrikeAmount {
-                    amount: fee_amount,
-                    currency: fee_info.currency,
-                },
-                &self.unit,
-            )?
+            if Strike::currency_unit_eq_strike(&self.unit, &fee_info.currency) {
+                Strike::from_strike_amount(fee_info.clone(), &self.unit)?
+            } else {
+                Strike::convert_fee_to_unit(fee_info, &self.unit, quote.conversion_rate)?
+            }
         } else {
             0
         };
@@ -782,58 +854,115 @@ impl Strike {
     }
 }
 
-pub(crate) fn from_strike_amount(
-    strike_amount: StrikeAmount,
-    target_unit: &CurrencyUnit,
-) -> anyhow::Result<u64> {
-    match target_unit {
-        CurrencyUnit::Sat => strike_amount.to_sats(),
-        CurrencyUnit::Msat => Ok(strike_amount.to_sats()? * 1000),
-        CurrencyUnit::Usd => {
-            if strike_amount.currency == StrikeCurrencyUnit::USD {
-                Ok((strike_amount.amount * 100.0).round() as u64)
-            } else {
-                bail!("Could not convert strike USD");
-            }
-        }
-        CurrencyUnit::Eur => {
-            if strike_amount.currency == StrikeCurrencyUnit::EUR {
-                Ok((strike_amount.amount * 100.0).round() as u64)
-            } else {
-                bail!("Could not convert to EUR");
-            }
-        }
-        _ => bail!("Unsupported unit"),
-    }
+// Group helper functions into a trait for clarity
+trait StrikeHelpers {
+    fn from_strike_amount(
+        strike_amount: StrikeAmount,
+        target_unit: &CurrencyUnit,
+    ) -> anyhow::Result<u64>;
+    fn to_strike_unit<T: Into<u64>>(
+        amount: T,
+        current_unit: &CurrencyUnit,
+    ) -> anyhow::Result<StrikeAmount>;
+    fn currency_unit_eq_strike(unit: &CurrencyUnit, strike: &StrikeCurrencyUnit) -> bool;
+    fn convert_fee_to_unit(
+        fee_amount: StrikeAmount,
+        target_unit: &CurrencyUnit,
+        rate: strike_rs::ConversionRate,
+    ) -> anyhow::Result<u64>;
 }
 
-pub(crate) fn to_strike_unit<T>(
-    amount: T,
-    current_unit: &CurrencyUnit,
-) -> anyhow::Result<StrikeAmount>
-where
-    T: Into<u64>,
-{
-    let amount = amount.into();
-    match current_unit {
-        CurrencyUnit::Sat => Ok(StrikeAmount::from_sats(amount)),
-        CurrencyUnit::Msat => Ok(StrikeAmount::from_sats(amount / 1000)),
-        CurrencyUnit::Usd => {
-            let dollars = (amount as f64 / 100_f64) * 100.0;
-
-            Ok(StrikeAmount {
-                currency: StrikeCurrencyUnit::USD,
-                amount: dollars.round() / 100.0,
-            })
+impl StrikeHelpers for Strike {
+    fn from_strike_amount(
+        strike_amount: StrikeAmount,
+        target_unit: &CurrencyUnit,
+    ) -> anyhow::Result<u64> {
+        match target_unit {
+            CurrencyUnit::Sat => strike_amount.to_sats(),
+            CurrencyUnit::Msat => Ok(strike_amount.to_sats()? * 1000),
+            CurrencyUnit::Usd => {
+                if strike_amount.currency == StrikeCurrencyUnit::USD {
+                    Ok((strike_amount.amount * 100.0).round() as u64)
+                } else {
+                    bail!("Could not convert strike USD");
+                }
+            }
+            CurrencyUnit::Eur => {
+                if strike_amount.currency == StrikeCurrencyUnit::EUR {
+                    Ok((strike_amount.amount * 100.0).round() as u64)
+                } else {
+                    bail!("Could not convert to EUR");
+                }
+            }
+            _ => bail!("Unsupported unit"),
         }
-        CurrencyUnit::Eur => {
-            let euro = (amount as f64 / 100_f64) * 100.0;
+    }
 
-            Ok(StrikeAmount {
-                currency: StrikeCurrencyUnit::EUR,
-                amount: euro.round() / 100.0,
-            })
+    fn to_strike_unit<T: Into<u64>>(
+        amount: T,
+        current_unit: &CurrencyUnit,
+    ) -> anyhow::Result<StrikeAmount> {
+        let amount = amount.into();
+        match current_unit {
+            CurrencyUnit::Sat => Ok(StrikeAmount::from_sats(amount)),
+            CurrencyUnit::Msat => Ok(StrikeAmount::from_sats(amount / 1000)),
+            CurrencyUnit::Usd => {
+                let dollars = (amount as f64 / 100_f64) * 100.0;
+                Ok(StrikeAmount {
+                    currency: StrikeCurrencyUnit::USD,
+                    amount: dollars.round() / 100.0,
+                })
+            }
+            CurrencyUnit::Eur => {
+                let euro = (amount as f64 / 100_f64) * 100.0;
+                Ok(StrikeAmount {
+                    currency: StrikeCurrencyUnit::EUR,
+                    amount: euro.round() / 100.0,
+                })
+            }
+            _ => bail!("Unsupported unit"),
         }
-        _ => bail!("Unsupported unit"),
+    }
+
+    fn currency_unit_eq_strike(unit: &CurrencyUnit, strike: &StrikeCurrencyUnit) -> bool {
+        match (unit, strike) {
+            (CurrencyUnit::Sat, StrikeCurrencyUnit::BTC) => true,
+            (CurrencyUnit::Msat, StrikeCurrencyUnit::BTC) => true, // msat is subunit of BTC
+            (CurrencyUnit::Usd, StrikeCurrencyUnit::USD) => true,
+            (CurrencyUnit::Eur, StrikeCurrencyUnit::EUR) => true,
+            _ => false,
+        }
+    }
+
+    fn convert_fee_to_unit(
+        fee_amount: StrikeAmount,
+        target_unit: &CurrencyUnit,
+        rate: strike_rs::ConversionRate,
+    ) -> anyhow::Result<u64> {
+        // Only support conversion between BTC (sats) and USD/EUR for now
+        let rate = rate.amount;
+        match (&fee_amount.currency, target_unit) {
+            (StrikeCurrencyUnit::USD, CurrencyUnit::Sat)
+            | (StrikeCurrencyUnit::EUR, CurrencyUnit::Sat) => {
+                // rate: X USD per BTC, so 1 USD = 1/X BTC = 100_000_000/X sats
+                let sats = (fee_amount.amount * 100_000_000.0 / rate).round() as u64;
+                Ok(sats)
+            }
+            (StrikeCurrencyUnit::USD, CurrencyUnit::Msat)
+            | (StrikeCurrencyUnit::EUR, CurrencyUnit::Msat) => {
+                let msats = (fee_amount.amount * 100_000_000_000.0 / rate).round() as u64;
+                Ok(msats)
+            }
+            (StrikeCurrencyUnit::USD, CurrencyUnit::Usd)
+            | (StrikeCurrencyUnit::EUR, CurrencyUnit::Eur) => {
+                // fee is already in correct fiat unit, return as cents
+                Ok((fee_amount.amount * 100.0).round() as u64)
+            }
+            _ => Err(anyhow!(
+                "Unsupported fee currency/unit conversion: {:?} -> {:?}",
+                fee_amount.currency,
+                target_unit
+            )),
+        }
     }
 }

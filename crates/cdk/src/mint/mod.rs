@@ -457,7 +457,11 @@ impl Mint {
             .await
             .map_err(|e| {
                 tracing::error!("Internal settlement make_payment failed: {:?}", e);
-                Error::ExpiredQuote(0, 0) // TODO: handle different error cases, this is just because most likely this fails because the currency exchange quote is expired
+                // Only return ExpiredQuote if the error string contains the expired message from strike
+                if format!("{e:?}").contains("Currency exchange quote has expired") {
+                    return Error::ExpiredQuote(0, 0);
+                }
+                Error::PaymentFailed
             })?;
 
         if payment_result.status != MeltQuoteState::Paid {

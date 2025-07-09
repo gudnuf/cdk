@@ -22,4 +22,5 @@ thiserror.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 axum.workspace = true
-strike-rs = { git = "https://github.com/gudnuf/strike-rs.git", rev = "e37f90e69b541bc544601341598154a61d63e3e4"}
+# strike-rs = { path = "/Users/edward/rust/strike-rs" }
+strike-rs = { git = "https://github.com/gudnuf/strike-rs.git", rev = "eb59400365122f13e3dc074618f0b4251252e02a"}
