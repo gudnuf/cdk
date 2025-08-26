@@ -11,7 +11,7 @@ rust-version.workspace = true
 readme = "README.md"
 
 [features]
-default = ["management-rpc", "cln", "lnd", "lnbits", "fakewallet", "grpc-processor", "sqlite"]
+default = ["management-rpc", "cln", "lnd", "lnbits", "fakewallet", "grpc-processor", "sqlite", "nwc"]
 # Database features - at least one must be enabled
 sqlite = ["dep:cdk-sqlite"]
 postgres = ["dep:cdk-postgres"]
@@ -24,6 +24,7 @@ fakewallet = ["dep:cdk-fake-wallet"]
 ldk-node = ["dep:cdk-ldk-node"]
 grpc-processor = ["dep:cdk-payment-processor", "cdk-signatory/grpc"]
 sqlcipher = ["sqlite", "cdk-sqlite/sqlcipher"]
+nwc = ["dep:cdk-nwc"]
 # MSRV is not committed to with swagger enabled
 swagger = ["cdk-axum/swagger", "dep:utoipa", "dep:utoipa-swagger-ui"]
 redis = ["cdk-axum/redis"]
@@ -50,6 +51,7 @@ cdk-signatory.workspace = true
 cdk-mint-rpc = { workspace = true, optional = true }
 cdk-payment-processor = { workspace = true, optional = true }
 config.workspace = true
+cdk-nwc = { workspace = true, optional = true }
 clap.workspace = true
 bitcoin.workspace = true
 tokio = { workspace = true, default-features = false, features = ["signal"] }

@@ -17,7 +17,8 @@ use cdk::nuts::CurrencyUnit;
     feature = "cln",
     feature = "lnd",
     feature = "ldk-node",
-    feature = "fakewallet"
+    feature = "fakewallet",
+    feature = "nwc"
 ))]
 use cdk::types::FeeReserve;
 
@@ -318,5 +319,26 @@ impl LnBackendSetup for config::LdkNode {
         ldk_node.set_web_addr(webserver_addr);
 
         Ok(ldk_node)
+    }
+}
+
+#[cfg(feature = "nwc")]
+#[async_trait]
+impl LnBackendSetup for config::Nwc {
+    async fn setup(
+        &self,
+        _routers: &mut Vec<Router>,
+        _settings: &Settings,
+        unit: CurrencyUnit,
+        _runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
+        _work_dir: &Path,
+    ) -> anyhow::Result<cdk_nwc::NWCWallet> {
+        let fee_reserve = FeeReserve {
+            min_fee_reserve: self.reserve_fee_min,
+            percent_fee_reserve: self.fee_percent,
+        };
+
+        let nwc = cdk_nwc::NWCWallet::new(&self.nwc_uri, fee_reserve, unit).await?;
+        Ok(nwc)
     }
 }
