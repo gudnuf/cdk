@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::bail;
 use cdk_common::amount::amount_for_offer;
@@ -13,6 +14,7 @@ use cdk_common::payment::{
 };
 use cdk_common::{MeltOptions, MeltQuoteBolt12Request};
 use lightning::offers::offer::Offer;
+use lightning_invoice::Bolt11Invoice;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -75,7 +77,10 @@ impl Mint {
                 if method == PaymentMethod::Bolt11
                     && !matches!(
                         settings.options,
-                        Some(MeltMethodOptions::Bolt11 { amountless: true })
+                        Some(MeltMethodOptions::Bolt11 {
+                            amountless: true,
+                            ..
+                        })
                     )
                 {
                     return Err(Error::AmountlessInvoiceNotSupported(unit, method));
@@ -85,6 +90,40 @@ impl Mint {
             }
             None => amount,
         };
+
+        // Check if node pubkey whitelist is configured for bolt11 payments
+        if method == PaymentMethod::Bolt11 {
+            if let Some(MeltMethodOptions::Bolt11 {
+                whitelisted_node_pubkeys,
+                ..
+            }) = &settings.options
+            {
+                if let Some(whitelisted_pubkeys) = whitelisted_node_pubkeys {
+                    if !whitelisted_pubkeys.is_empty() {
+                        tracing::info!("Handling whitelisted node pubkeys");
+                        // Parse the bolt11 invoice to extract the payee pubkey
+                        let invoice = Bolt11Invoice::from_str(&request)
+                            .map_err(|_| Error::InvalidPaymentRequest)?;
+                        let payee_pubkey = invoice.get_payee_pub_key();
+                        let payee_pubkey_hex = format!("{:02x?}", payee_pubkey.serialize())
+                            .replace(['[', ']', ',', ' '], "");
+
+                        if !whitelisted_pubkeys.contains(&payee_pubkey_hex) {
+                            tracing::warn!(
+                                "Melt request rejected: payee pubkey {} not in whitelist",
+                                payee_pubkey_hex
+                            );
+                            return Err(Error::PayeeNotInWhitelist(
+                                mint_info
+                                    .name
+                                    .clone()
+                                    .unwrap_or_else(|| "Unknown Mint".to_string()),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
 
         let is_above_max = matches!(settings.max_amount, Some(max) if amount > max);
         let is_below_min = matches!(settings.min_amount, Some(min) if amount < min);

@@ -546,6 +546,7 @@ impl CdkMint for MintRPCServer {
         let options = if let Some(options) = request_inner.options {
             Some(cdk::nuts::nut05::MeltMethodOptions::Bolt11 {
                 amountless: options.amountless,
+                whitelisted_node_pubkeys: None, // TODO: Add RPC support
             })
         } else if let Some(current_settings) = current_nut05_settings.as_ref() {
             current_settings.options.clone()

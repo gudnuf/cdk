@@ -112,6 +112,7 @@ impl Lnd {
                 invoice_description: true,
                 amountless: true,
                 bolt12: false,
+                whitelisted_node_pubkeys: None,
             },
         })
     }

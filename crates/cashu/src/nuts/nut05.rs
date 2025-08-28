@@ -178,10 +178,19 @@ impl Serialize for MeltMethodSettings {
         }
 
         let mut amountless_in_top_level = false;
-        if let Some(MeltMethodOptions::Bolt11 { amountless }) = &self.options {
+        let mut has_whitelisted_pubkeys = false;
+        if let Some(MeltMethodOptions::Bolt11 {
+            amountless,
+            whitelisted_node_pubkeys,
+        }) = &self.options
+        {
             if *amountless {
                 num_fields += 1;
                 amountless_in_top_level = true;
+            }
+            if whitelisted_node_pubkeys.is_some() {
+                num_fields += 1;
+                has_whitelisted_pubkeys = true;
             }
         }
 
@@ -201,6 +210,17 @@ impl Serialize for MeltMethodSettings {
         // If there's an amountless flag in Bolt11 options, add it at the top level
         if amountless_in_top_level {
             state.serialize_field("amountless", &true)?;
+        }
+
+        // If there are whitelisted node pubkeys in Bolt11 options, add them at the top level
+        if has_whitelisted_pubkeys {
+            if let Some(MeltMethodOptions::Bolt11 {
+                whitelisted_node_pubkeys,
+                ..
+            }) = &self.options
+            {
+                state.serialize_field("whitelisted_node_pubkeys", whitelisted_node_pubkeys)?;
+            }
         }
 
         state.end()
@@ -225,6 +245,7 @@ impl<'de> Visitor<'de> for MeltMethodSettingsVisitor {
         let mut min_amount: Option<Amount> = None;
         let mut max_amount: Option<Amount> = None;
         let mut amountless: Option<bool> = None;
+        let mut whitelisted_node_pubkeys: Option<Vec<String>> = None;
 
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
@@ -258,18 +279,27 @@ impl<'de> Visitor<'de> for MeltMethodSettingsVisitor {
                     }
                     amountless = Some(map.next_value()?);
                 }
+                "whitelisted_node_pubkeys" => {
+                    whitelisted_node_pubkeys = Some(map.next_value()?);
+                }
+
                 "options" => {
-                    // If there are explicit options, they take precedence, except the amountless
-                    // field which we will handle specially
+                    // If there are explicit options, they take precedence, except for fields
+                    // that we also handle at the top level
                     let options: Option<MeltMethodOptions> = map.next_value()?;
 
                     if let Some(MeltMethodOptions::Bolt11 {
                         amountless: amountless_from_options,
+                        whitelisted_node_pubkeys: whitelisted_from_options,
                     }) = options
                     {
                         // If we already found a top-level amountless, use that instead
                         if amountless.is_none() {
                             amountless = Some(amountless_from_options);
+                        }
+                        // If we already found top-level whitelisted_node_pubkeys, use that instead
+                        if whitelisted_node_pubkeys.is_none() {
+                            whitelisted_node_pubkeys = whitelisted_from_options;
                         }
                     }
                 }
@@ -283,9 +313,14 @@ impl<'de> Visitor<'de> for MeltMethodSettingsVisitor {
         let method = method.ok_or_else(|| de::Error::missing_field("method"))?;
         let unit = unit.ok_or_else(|| de::Error::missing_field("unit"))?;
 
-        // Create options based on the method and the amountless flag
-        let options = if method == PaymentMethod::Bolt11 && amountless.is_some() {
-            amountless.map(|amountless| MeltMethodOptions::Bolt11 { amountless })
+        // Create options based on the method and any Bolt11-specific fields
+        let options = if method == PaymentMethod::Bolt11
+            && (amountless.is_some() || whitelisted_node_pubkeys.is_some())
+        {
+            Some(MeltMethodOptions::Bolt11 {
+                amountless: amountless.unwrap_or(false),
+                whitelisted_node_pubkeys,
+            })
         } else {
             None
         };
@@ -318,6 +353,9 @@ pub enum MeltMethodOptions {
     Bolt11 {
         /// Mint supports paying bolt11 amountless
         amountless: bool,
+        /// Whitelisted node public keys (hex format)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        whitelisted_node_pubkeys: Option<Vec<String>>,
     },
 }
 
@@ -404,7 +442,7 @@ mod tests {
         assert_eq!(settings.max_amount, Some(Amount::from(10000)));
 
         match settings.options {
-            Some(MeltMethodOptions::Bolt11 { amountless }) => {
+            Some(MeltMethodOptions::Bolt11 { amountless, .. }) => {
                 assert!(amountless);
             }
             _ => panic!("Expected Bolt11 options with amountless = true"),
@@ -436,7 +474,7 @@ mod tests {
         let settings: MeltMethodSettings = from_str(json_str).unwrap();
 
         match settings.options {
-            Some(MeltMethodOptions::Bolt11 { amountless }) => {
+            Some(MeltMethodOptions::Bolt11 { amountless, .. }) => {
                 assert!(amountless, "Top-level amountless should take precedence");
             }
             _ => panic!("Expected Bolt11 options with amountless = true"),

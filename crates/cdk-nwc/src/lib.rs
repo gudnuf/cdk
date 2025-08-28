@@ -99,6 +99,8 @@ pub struct NWCWallet {
     connection_config: ConnectionConfig,
     /// Health check cancellation token
     health_check_cancel_token: CancellationToken,
+    /// Whitelisted node public keys for bolt11 payments
+    whitelisted_node_pubkeys: Option<Vec<String>>,
 }
 
 impl NWCWallet {
@@ -111,12 +113,47 @@ impl NWCWallet {
         Self::with_connection_config(nwc_uri, fee_reserve, unit, ConnectionConfig::default()).await
     }
 
+    /// Create new [`NWCWallet`] from NWC URI string with whitelist and default connection config
+    pub async fn new_with_whitelist(
+        nwc_uri: &str,
+        fee_reserve: FeeReserve,
+        unit: CurrencyUnit,
+        whitelisted_node_pubkeys: Option<Vec<String>>,
+    ) -> Result<Self, Error> {
+        Self::with_connection_config_and_whitelist(
+            nwc_uri,
+            fee_reserve,
+            unit,
+            ConnectionConfig::default(),
+            whitelisted_node_pubkeys,
+        )
+        .await
+    }
+
     /// Create new [`NWCWallet`] from NWC URI string with custom connection config
     pub async fn with_connection_config(
         nwc_uri: &str,
         fee_reserve: FeeReserve,
         unit: CurrencyUnit,
         connection_config: ConnectionConfig,
+    ) -> Result<Self, Error> {
+        Self::with_connection_config_and_whitelist(
+            nwc_uri,
+            fee_reserve,
+            unit,
+            connection_config,
+            None,
+        )
+        .await
+    }
+
+    /// Create new [`NWCWallet`] from NWC URI string with custom connection config and whitelist
+    pub async fn with_connection_config_and_whitelist(
+        nwc_uri: &str,
+        fee_reserve: FeeReserve,
+        unit: CurrencyUnit,
+        connection_config: ConnectionConfig,
+        whitelisted_node_pubkeys: Option<Vec<String>>,
     ) -> Result<Self, Error> {
         // NWC requires TLS for talking to the relay
         if rustls::crypto::CryptoProvider::get_default().is_none() {
@@ -147,6 +184,7 @@ impl NWCWallet {
             notification_handle: Arc::new(Mutex::new(None)),
             connection_config,
             health_check_cancel_token: CancellationToken::new(),
+            whitelisted_node_pubkeys,
         };
 
         // Start notification handler
@@ -412,6 +450,7 @@ impl MintPayment for NWCWallet {
             invoice_description: true,
             amountless: true,
             bolt12: false,
+            whitelisted_node_pubkeys: self.whitelisted_node_pubkeys.clone(),
         })?)
     }
 
@@ -717,9 +756,6 @@ impl MintPayment for NWCWallet {
                     }
                     Err(e) => {
                         tracing::warn!("NWC: Failed to lookup payment: {}", e);
-                        // Return failed status instead of crashing
-                        // TODO: melt quotes can get created even if no payment has been attempted yet,
-                        // figure a better way to handle this
                         Ok(MakePaymentResponse {
                             payment_proof: None,
                             payment_lookup_id: request_lookup_id.clone(),

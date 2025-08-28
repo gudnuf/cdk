@@ -255,6 +255,7 @@ impl MintBuilder {
             max_amount: Some(limits.melt_max),
             options: Some(MeltMethodOptions::Bolt11 {
                 amountless: settings.amountless,
+                whitelisted_node_pubkeys: settings.whitelisted_node_pubkeys.clone(),
             }),
         };
         self.mint_info.nuts.nut05.methods.push(melt_method_settings);

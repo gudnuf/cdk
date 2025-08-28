@@ -62,6 +62,7 @@ impl LNbits {
                 invoice_description: true,
                 amountless: false,
                 bolt12: false,
+                whitelisted_node_pubkeys: None,
             },
         })
     }

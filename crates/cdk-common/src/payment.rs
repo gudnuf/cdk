@@ -387,6 +387,9 @@ pub struct Bolt11Settings {
     pub amountless: bool,
     /// Bolt12 supported
     pub bolt12: bool,
+    /// Whitelisted node public keys for bolt11 payments
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub whitelisted_node_pubkeys: Option<Vec<String>>,
 }
 
 impl TryFrom<Bolt11Settings> for Value {

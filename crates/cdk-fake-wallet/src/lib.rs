@@ -281,6 +281,7 @@ impl MintPayment for FakeWallet {
             invoice_description: true,
             amountless: false,
             bolt12: true,
+            whitelisted_node_pubkeys: None,
         })?)
     }
 

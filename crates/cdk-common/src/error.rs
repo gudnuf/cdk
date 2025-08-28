@@ -38,6 +38,9 @@ pub enum Error {
     /// Invalid payment request
     #[error("Invalid payment request")]
     InvalidPaymentRequest,
+    /// Payee not in whitelist
+    #[error("These points can only be spent at {}.", .0)]
+    PayeeNotInWhitelist(String),
     /// Bolt11 invoice does not have amount
     #[error("Invoice Amount undefined")]
     InvoiceAmountUndefined,

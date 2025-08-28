@@ -338,7 +338,17 @@ impl LnBackendSetup for config::Nwc {
             percent_fee_reserve: self.fee_percent,
         };
 
-        let nwc = cdk_nwc::NWCWallet::new(&self.nwc_uri, fee_reserve, unit).await?;
+        let nwc = if self.whitelisted_node_pubkeys.is_some() {
+            cdk_nwc::NWCWallet::new_with_whitelist(
+                &self.nwc_uri,
+                fee_reserve,
+                unit,
+                self.whitelisted_node_pubkeys.clone(),
+            )
+            .await?
+        } else {
+            cdk_nwc::NWCWallet::new(&self.nwc_uri, fee_reserve, unit).await?
+        };
         Ok(nwc)
     }
 }

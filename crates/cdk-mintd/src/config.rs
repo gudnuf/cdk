@@ -296,6 +296,8 @@ pub struct Nwc {
     pub nwc_uri: String,
     pub fee_percent: f32,
     pub reserve_fee_min: Amount,
+    /// Whitelisted node public keys for bolt11 melt operations (hex format)
+    pub whitelisted_node_pubkeys: Option<Vec<String>>,
 }
 
 #[cfg(feature = "fakewallet")]

@@ -75,6 +75,7 @@ impl MintPayment for Cln {
             invoice_description: true,
             amountless: true,
             bolt12: true,
+            whitelisted_node_pubkeys: None,
         })?)
     }
 

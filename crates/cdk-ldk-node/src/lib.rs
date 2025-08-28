@@ -474,6 +474,7 @@ impl MintPayment for CdkLdkNode {
             invoice_description: true,
             amountless: true,
             bolt12: true,
+            whitelisted_node_pubkeys: None,
         };
         Ok(serde_json::to_value(settings)?)
     }
