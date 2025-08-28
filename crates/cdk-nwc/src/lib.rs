@@ -14,6 +14,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
@@ -33,11 +34,45 @@ use futures::Stream;
 use nwc::prelude::*;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 pub mod error;
+
+/// Connection retry configuration for NWC
+#[derive(Debug, Clone)]
+pub struct ConnectionConfig {
+    /// Maximum number of retry attempts
+    pub max_retries: usize,
+    /// Initial retry delay in seconds
+    pub initial_retry_delay: u64,
+    /// Maximum retry delay in seconds
+    pub max_retry_delay: u64,
+    /// Multiplier for exponential backoff
+    pub backoff_multiplier: f64,
+    /// Health check interval in seconds
+    pub health_check_interval: u64,
+    /// Connection timeout for health checks in seconds
+    pub connection_timeout: u64,
+    /// Timeout for initial validation during startup in seconds
+    pub validation_timeout: u64,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 5,
+            initial_retry_delay: 1,
+            max_retry_delay: 60,
+            backoff_multiplier: 2.0,
+            health_check_interval: 30, // Check health every 30 seconds
+            connection_timeout: 15,    // 15 second timeout for health checks
+            validation_timeout: 30,    // 30 second timeout for initial validation
+        }
+    }
+}
 
 /// NWC Wallet Backend  
 #[derive(Clone)]
@@ -60,14 +95,28 @@ pub struct NWCWallet {
     unit: CurrencyUnit,
     /// Notification handler task handle
     notification_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Connection configuration for retry logic
+    connection_config: ConnectionConfig,
+    /// Health check cancellation token
+    health_check_cancel_token: CancellationToken,
 }
 
 impl NWCWallet {
-    /// Create new [`NWCWallet`] from NWC URI string
+    /// Create new [`NWCWallet`] from NWC URI string with default connection config
     pub async fn new(
         nwc_uri: &str,
         fee_reserve: FeeReserve,
         unit: CurrencyUnit,
+    ) -> Result<Self, Error> {
+        Self::with_connection_config(nwc_uri, fee_reserve, unit, ConnectionConfig::default()).await
+    }
+
+    /// Create new [`NWCWallet`] from NWC URI string with custom connection config
+    pub async fn with_connection_config(
+        nwc_uri: &str,
+        fee_reserve: FeeReserve,
+        unit: CurrencyUnit,
+        connection_config: ConnectionConfig,
     ) -> Result<Self, Error> {
         // NWC requires TLS for talking to the relay
         if rustls::crypto::CryptoProvider::get_default().is_none() {
@@ -79,7 +128,11 @@ impl NWCWallet {
 
         let nwc_client = Arc::new(NWC::new(uri));
 
-        NWCWallet::validate_supported_methods_and_notifications(&nwc_client).await?;
+        NWCWallet::validate_supported_methods_and_notifications(
+            &nwc_client,
+            connection_config.validation_timeout,
+        )
+        .await?;
 
         let (sender, receiver) = tokio::sync::mpsc::channel(100);
 
@@ -92,77 +145,238 @@ impl NWCWallet {
             wait_invoice_is_active: Arc::new(AtomicBool::new(false)),
             unit,
             notification_handle: Arc::new(Mutex::new(None)),
+            connection_config,
+            health_check_cancel_token: CancellationToken::new(),
         };
 
         // Start notification handler
         wallet.start_notification_handler().await?;
 
+        // Start health check
+        wallet.start_health_check();
+
         Ok(wallet)
     }
 
-    /// Start the notification handler for payment updates
+    /// Start the notification handler for payment updates with automatic reconnection
     async fn start_notification_handler(&self) -> Result<(), Error> {
         let nwc_client = self.nwc_client.clone();
         let sender = self.sender.clone();
-
-        // Subscribe to notifications
-        nwc_client.subscribe_to_notifications().await?;
+        let connection_config = self.connection_config.clone();
 
         let handle = tokio::spawn(async move {
-            let result = nwc_client
-                .handle_notifications(|notification| {
-                    let sender = sender.clone();
-
-                    async move {
-                        match notification.notification_type {
-                            NotificationType::PaymentReceived => {
-                                if let Ok(payment) = notification.to_pay_notification() {
-                                    tracing::debug!(
-                                        "NWC: Payment received: {:?}",
-                                        payment.payment_hash
-                                    );
-
-                                    let payment_hash = match Hash::from_str(&payment.payment_hash) {
-                                        Ok(hash) => hash,
-                                        Err(e) => {
-                                            tracing::error!(
-                                                "NWC: Failed to parse payment hash: {}",
-                                                e
-                                            );
-                                            return Ok(false);
-                                        }
-                                    };
-
-                                    let payment_id =
-                                        PaymentIdentifier::PaymentHash(*payment_hash.as_ref());
-
-                                    let amount = Amount::from(payment.amount / 1000); // Convert msat to sat
-
-                                    // Send notification through channel
-                                    let _ = sender
-                                        .send((payment_id, amount, payment.payment_hash))
-                                        .await;
-                                }
-                            }
-                            NotificationType::PaymentSent => {
-                                // We don't need to handle payment sent notifications
-                                // Status can be checked via lookup_invoice when needed
-                            }
-                        }
-                        Ok(false) // Continue processing
-                    }
-                })
-                .await;
-
-            if let Err(e) = result {
-                tracing::error!("Error handling NWC notifications: {}", e);
-            }
+            Self::run_resilient_notification_handler(nwc_client, sender, connection_config).await;
         });
 
         let mut notification_handle = self.notification_handle.lock().await;
         *notification_handle = Some(handle);
 
         Ok(())
+    }
+
+    /// Run the notification handler with automatic reconnection and exponential backoff
+    async fn run_resilient_notification_handler(
+        nwc_client: Arc<NWC>,
+        sender: tokio::sync::mpsc::Sender<(PaymentIdentifier, Amount, String)>,
+        config: ConnectionConfig,
+    ) {
+        let mut retry_count = 0;
+        let mut retry_delay = config.initial_retry_delay;
+
+        loop {
+            tracing::info!(
+                "NWC: Attempting to establish notification connection (attempt {}/{})",
+                retry_count + 1,
+                config.max_retries + 1
+            );
+
+            match Self::establish_notification_connection(&nwc_client, &sender).await {
+                Ok(_) => {
+                    tracing::info!("NWC: Notification connection established successfully");
+                    // Reset retry count on successful connection
+                    retry_count = 0;
+                    retry_delay = config.initial_retry_delay;
+
+                    // Connection succeeded, but then failed during operation
+                    // This means we should retry the connection
+                    tracing::warn!("NWC: Notification connection lost, attempting to reconnect");
+                }
+                Err(e) => {
+                    retry_count += 1;
+                    tracing::error!("NWC: Failed to establish notification connection: {}", e);
+
+                    if retry_count > config.max_retries {
+                        tracing::error!(
+                            "NWC: Exceeded maximum retry attempts ({}), giving up",
+                            config.max_retries
+                        );
+                        return;
+                    }
+
+                    tracing::info!(
+                        "NWC: Retrying in {} seconds (attempt {}/{})",
+                        retry_delay,
+                        retry_count + 1,
+                        config.max_retries + 1
+                    );
+
+                    sleep(Duration::from_secs(retry_delay)).await;
+
+                    // Calculate next retry delay with exponential backoff
+                    retry_delay = std::cmp::min(
+                        (retry_delay as f64 * config.backoff_multiplier) as u64,
+                        config.max_retry_delay,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Establish a single notification connection and handle notifications until it fails
+    async fn establish_notification_connection(
+        nwc_client: &Arc<NWC>,
+        sender: &tokio::sync::mpsc::Sender<(PaymentIdentifier, Amount, String)>,
+    ) -> Result<(), Error> {
+        // Subscribe to notifications
+        nwc_client
+            .subscribe_to_notifications()
+            .await
+            .map_err(|e| Error::Connection(e.to_string()))?;
+
+        tracing::info!("NWC: Successfully subscribed to notifications");
+
+        // Handle notifications until connection fails
+        let result = nwc_client
+            .handle_notifications(|notification| {
+                let sender = sender.clone();
+
+                async move {
+                    match notification.notification_type {
+                        NotificationType::PaymentReceived => {
+                            if let Ok(payment) = notification.to_pay_notification() {
+                                tracing::debug!(
+                                    "NWC: Payment received: {:?}",
+                                    payment.payment_hash
+                                );
+
+                                let payment_hash = match Hash::from_str(&payment.payment_hash) {
+                                    Ok(hash) => hash,
+                                    Err(e) => {
+                                        tracing::error!("NWC: Failed to parse payment hash: {}", e);
+                                        return Ok(false);
+                                    }
+                                };
+
+                                let payment_id =
+                                    PaymentIdentifier::PaymentHash(*payment_hash.as_ref());
+
+                                let amount = Amount::from(payment.amount / 1000); // Convert msat to sat
+
+                                // Send notification through channel
+                                if let Err(e) = sender
+                                    .send((payment_id, amount, payment.payment_hash))
+                                    .await
+                                {
+                                    tracing::error!(
+                                        "NWC: Failed to send payment notification: {}",
+                                        e
+                                    );
+                                    return Ok(true); // Exit the notification handler
+                                }
+                            }
+                        }
+                        NotificationType::PaymentSent => {
+                            // We don't need to handle payment sent notifications
+                            // Status can be checked via lookup_invoice when needed
+                        }
+                    }
+                    Ok(false) // Continue processing
+                }
+            })
+            .await;
+
+        match result {
+            Ok(_) => {
+                tracing::info!("NWC: Notification handler exited normally");
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("NWC: Notification handler failed: {}", e);
+                Err(Error::Connection(e.to_string()))
+            }
+        }
+    }
+
+    /// Start background health check task
+    fn start_health_check(&self) {
+        let nwc_client = self.nwc_client.clone();
+        let config = self.connection_config.clone();
+        let cancel_token = self.health_check_cancel_token.clone();
+
+        tokio::spawn(async move {
+            Self::run_health_check(nwc_client, config, cancel_token).await;
+        });
+    }
+
+    /// Run periodic health checks on the NWC connection
+    async fn run_health_check(
+        nwc_client: Arc<NWC>,
+        config: ConnectionConfig,
+        cancel_token: CancellationToken,
+    ) {
+        let mut interval = tokio::time::interval(Duration::from_secs(config.health_check_interval));
+
+        // Skip the first tick to avoid immediate health check
+        interval.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    match tokio::time::timeout(
+                        Duration::from_secs(config.connection_timeout),
+                        nwc_client.get_info()
+                    ).await {
+                        Ok(Ok(_info)) => {
+                            tracing::debug!("NWC: Health check passed");
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!("NWC: Health check failed: {}", e);
+                            // We don't restart the connection here as the notification handler
+                            // will detect the failure and restart automatically
+                        }
+                        Err(_) => {
+                            tracing::warn!("NWC: Health check timed out after {} seconds", config.connection_timeout);
+                        }
+                    }
+                }
+                _ = cancel_token.cancelled() => {
+                    tracing::info!("NWC: Health check task cancelled");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Get connection status information
+    pub async fn connection_status(&self) -> Result<String, Error> {
+        match tokio::time::timeout(
+            Duration::from_secs(self.connection_config.connection_timeout),
+            self.nwc_client.get_info(),
+        )
+        .await
+        {
+            Ok(Ok(info)) => Ok(format!(
+                "Connected - Methods: {:?}, Notifications: {:?}",
+                info.methods, info.notifications
+            )),
+            Ok(Err(e)) => Err(Error::Connection(format!("Health check failed: {}", e))),
+            Err(_) => Err(Error::Connection("Health check timed out".to_string())),
+        }
+    }
+
+    /// Get current connection configuration
+    pub fn get_connection_config(&self) -> &ConnectionConfig {
+        &self.connection_config
     }
 
     /// Check if outgoing payment is already paid
@@ -503,7 +717,16 @@ impl MintPayment for NWCWallet {
                     }
                     Err(e) => {
                         tracing::warn!("NWC: Failed to lookup payment: {}", e);
-                        Err(payment::Error::Lightning(Box::new(e)))
+                        // Return failed status instead of crashing
+                        // TODO: melt quotes can get created even if no payment has been attempted yet,
+                        // figure a better way to handle this
+                        Ok(MakePaymentResponse {
+                            payment_proof: None,
+                            payment_lookup_id: request_lookup_id.clone(),
+                            status: MeltQuoteState::Pending,
+                            total_spent: Amount::ZERO,
+                            unit: self.unit.clone(),
+                        })
                     }
                 }
             }
@@ -518,8 +741,16 @@ impl MintPayment for NWCWallet {
 }
 
 impl NWCWallet {
-    async fn validate_supported_methods_and_notifications(client: &NWC) -> Result<(), Error> {
-        let info = client.get_info().await?;
+    async fn validate_supported_methods_and_notifications(
+        client: &NWC,
+        timeout_secs: u64,
+    ) -> Result<(), Error> {
+        let info = match tokio::time::timeout(Duration::from_secs(timeout_secs), client.get_info())
+            .await
+        {
+            Ok(result) => result?,
+            Err(_) => return Err(Error::Connection("Timeout during validation".to_string())),
+        };
 
         let required_methods = [
             "pay_invoice",
@@ -562,6 +793,7 @@ impl Drop for NWCWallet {
     fn drop(&mut self) {
         tracing::info!("Drop called on NWCWallet");
         self.wait_invoice_cancel_token.cancel();
+        self.health_check_cancel_token.cancel();
 
         // Cancel notification handler task if it exists
         // We need to use blocking approach since Drop is synchronous

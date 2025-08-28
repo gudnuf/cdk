@@ -28,6 +28,14 @@ pub enum Error {
     /// Serde JSON error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// Connection failure after maximum retries
+    #[error("Failed to maintain connection after {0} retries")]
+    MaxRetriesExceeded(usize),
+
+    /// Connection error
+    #[error("Connection error: {0}")]
+    Connection(String),
 }
 
 impl From<Error> for cdk_common::payment::Error {
@@ -51,6 +59,13 @@ impl From<Error> for cdk_common::payment::Error {
                 ))
             }
             Error::Json(e) => cdk_common::payment::Error::Serde(e),
+            Error::MaxRetriesExceeded(retries) => cdk_common::payment::Error::Custom(format!(
+                "Failed to maintain connection after {} retries",
+                retries
+            )),
+            Error::Connection(msg) => {
+                cdk_common::payment::Error::Custom(format!("Connection error: {}", msg))
+            }
         }
     }
 }
