@@ -723,7 +723,7 @@ impl MintPayment for NWCWallet {
                         Ok(MakePaymentResponse {
                             payment_proof: None,
                             payment_lookup_id: request_lookup_id.clone(),
-                            status: MeltQuoteState::Pending,
+                            status: MeltQuoteState::Unknown,
                             total_spent: Amount::ZERO,
                             unit: self.unit.clone(),
                         })
