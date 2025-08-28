@@ -211,6 +211,7 @@ pub fn create_fake_wallet_settings(
         lnd: None,
         ldk_node: None,
         fake_wallet: fake_wallet_config,
+        nwc: None,
         grpc_processor: None,
         database: Database {
             engine: DatabaseEngine::from_str(database).expect("valid database"),
@@ -259,6 +260,7 @@ pub fn create_cln_settings(
         lnd: None,
         ldk_node: None,
         fake_wallet: None,
+        nwc: None,
         grpc_processor: None,
         database: cdk_mintd::config::Database::default(),
         mint_management_rpc: None,
@@ -303,6 +305,7 @@ pub fn create_lnd_settings(
         ldk_node: None,
         lnd: Some(lnd_config),
         fake_wallet: None,
+        nwc: None,
         grpc_processor: None,
         database: cdk_mintd::config::Database::default(),
         mint_management_rpc: None,

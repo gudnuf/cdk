@@ -127,6 +127,8 @@ pub enum LnBackend {
     LdkNode,
     #[cfg(feature = "grpc-processor")]
     GrpcProcessor,
+    #[cfg(feature = "nwc")]
+    Nwc,
 }
 
 impl std::str::FromStr for LnBackend {
@@ -146,6 +148,8 @@ impl std::str::FromStr for LnBackend {
             "ldk-node" | "ldknode" => Ok(LnBackend::LdkNode),
             #[cfg(feature = "grpc-processor")]
             "grpcprocessor" => Ok(LnBackend::GrpcProcessor),
+            #[cfg(feature = "nwc")]
+            "nwc" => Ok(LnBackend::Nwc),
             _ => Err(format!("Unknown Lightning backend: {s}")),
         }
     }
@@ -284,6 +288,14 @@ fn default_webserver_host() -> Option<String> {
 #[cfg(feature = "ldk-node")]
 fn default_webserver_port() -> Option<u16> {
     Some(8091)
+}
+
+#[cfg(feature = "nwc")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Nwc {
+    pub nwc_uri: String,
+    pub fee_percent: f32,
+    pub reserve_fee_min: Amount,
 }
 
 #[cfg(feature = "fakewallet")]
@@ -442,6 +454,8 @@ pub struct Settings {
     pub lnd: Option<Lnd>,
     #[cfg(feature = "ldk-node")]
     pub ldk_node: Option<LdkNode>,
+    #[cfg(feature = "nwc")]
+    pub nwc: Option<Nwc>,
     #[cfg(feature = "fakewallet")]
     pub fake_wallet: Option<FakeWallet>,
     pub grpc_processor: Option<GrpcProcessor>,
@@ -565,6 +579,13 @@ impl Settings {
                 assert!(
                     settings.grpc_processor.is_some(),
                     "GRPC backend requires a valid config."
+                )
+            }
+            #[cfg(feature = "nwc")]
+            LnBackend::Nwc => {
+                assert!(
+                    settings.nwc.is_some(),
+                    "NWC backend requires a valid config."
                 )
             }
         }
