@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock as StdRwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use instant::Instant;
 
 use async_trait::async_trait;
 use cdk_common::{nut19, MeltQuoteBolt12Request, MintQuoteBolt12Request, MintQuoteBolt12Response};
