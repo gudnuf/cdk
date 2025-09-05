@@ -11,24 +11,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ Initialized WASM DB");
 
     // Create databases
-    let wallet_db = WalletWasmDatabase::new(":memory:").await?;
-    let mint_db = MintWasmDatabase::new(":memory:").await?;
-    println!("✓ Created databases");
+    #[cfg(target_arch = "wasm32")]
+    {
+        let wallet_db = WalletWasmDatabase::new_internal(":memory:").await?;
+        let mint_db = MintWasmDatabase::new_internal(":memory:").await?;
+        println!("✓ Created WASM databases");
+
+        // WASM-specific operations using internal methods
+        wallet_db
+            .set_internal("test_key".to_string(), "test_value".to_string())
+            .await?;
+        let value = wallet_db.get_internal("test_key").await?;
+        println!("✓ Stored and retrieved: {:?}", value);
+
+        let keys = wallet_db.keys_internal().await?;
+        println!("✓ Keys in database: {:?}", keys);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _wallet_db = WalletWasmDatabase::new(":memory:").await?;
+        let _mint_db = MintWasmDatabase::new(":memory:").await?;
+        println!("✓ Created native databases");
+    }
 
     // Show target-specific behavior
     #[cfg(target_arch = "wasm32")]
     {
         println!("Running on WASM target with in-memory key-value storage");
-
-        // WASM-specific operations
-        wallet_db
-            .set("test_key".to_string(), "test_value".to_string())
-            .await?;
-        let value = wallet_db.get("test_key").await?;
-        println!("✓ Stored and retrieved: {:?}", value);
-
-        let keys = wallet_db.keys().await?;
-        println!("✓ Keys in database: {:?}", keys);
+        println!("Note: JavaScript API uses Promises for async operations");
     }
 
     #[cfg(not(target_arch = "wasm32"))]

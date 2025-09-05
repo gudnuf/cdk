@@ -11,6 +11,9 @@ rust-version.workspace = true                            # MSRV
 readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [features]
 default = ["mint", "wallet", "auth"]
 mint = ["cdk-common/mint"]
@@ -26,7 +29,7 @@ serde_json.workspace = true
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console", "Storage"] }
