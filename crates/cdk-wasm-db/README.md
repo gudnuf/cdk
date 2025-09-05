@@ -52,9 +52,61 @@ let wallet_db = WalletWasmDatabase::new("wallet.db").await.unwrap();
 let db = WalletWasmDatabase::new(":memory:").await.unwrap();
 ```
 
+### JavaScript/TypeScript Usage (via wasm-pack)
+
+After building with wasm-pack, you can use the generated bindings in your web project:
+
+```typescript
+import init, { MintWasmDatabase, WalletWasmDatabase, init_db } from './pkg/cdk_wasm_db.js';
+
+// Initialize the WASM module
+async function setup() {
+    await init();
+    await init_db(); // Optional explicit initialization
+}
+
+// Use the wallet database
+async function useWalletDb() {
+    const db = new WalletWasmDatabase(":memory:");
+    
+    // Store and retrieve data
+    await db.set("key", "value");
+    const value = await db.get("key"); // Returns "value" or null
+    
+    // List all keys
+    const keys = await db.keys(); // Returns array of strings
+    
+    // Remove a key
+    await db.remove("key");
+    
+    // Clean up
+    db.free();
+}
+```
+
 ## Building for WebAssembly
 
-The crate automatically detects the target and uses appropriate dependencies:
+### Using wasm-pack (Recommended for Web Projects)
+
+The crate is designed to work with `wasm-pack` for generating JavaScript bindings:
+
+```bash
+# Install wasm-pack if you haven't already
+cargo install wasm-pack
+
+# Build the crate for web use
+wasm-pack build --target web --out-dir pkg
+
+# The generated files will be in the pkg/ directory:
+# - cdk_wasm_db.js        - JavaScript bindings
+# - cdk_wasm_db.d.ts      - TypeScript definitions  
+# - cdk_wasm_db_bg.wasm   - Compiled WebAssembly module
+# - package.json          - NPM package metadata
+```
+
+### Manual Cargo Build
+
+You can also build manually using cargo:
 
 ```bash
 # Build for WASM (uses lightweight implementation)
@@ -62,6 +114,32 @@ cargo build --target wasm32-unknown-unknown
 
 # Build for native (uses cdk-sqlite)
 cargo build
+```
+
+### Integration with Build Scripts
+
+You can integrate wasm-pack builds into shell scripts like this:
+
+```bash
+#!/bin/bash
+set -e
+
+# Set environment variables to fix Nix hardening issues with WASM compilation
+export NIX_HARDENING_ENABLE=""
+export CC_wasm32_unknown_unknown=/usr/bin/clang
+
+echo "Building WASM module..."
+wasm-pack build --target web --out-dir pkg
+
+echo "Building TypeScript..."
+bun run build:ts
+
+echo "Copying WASM files to dist..."
+mkdir -p dist/wasm
+cp pkg/*.wasm dist/wasm/
+cp pkg/*.js dist/wasm/
+
+echo "Build complete!"
 ```
 
 ## Implementation Details
@@ -80,26 +158,59 @@ cargo build
 
 ## API Reference
 
-### WASM-Specific Methods
+### Rust API (Internal/Native)
+
+For Rust code and internal usage:
 
 ```rust
+// Internal WASM methods (not exposed to JavaScript)
 impl MintWasmDatabase {
-    pub async fn new<T: Into<String>>(path: T) -> Result<Self, WasmDbError>;
-    pub async fn set(&self, key: String, value: String) -> Result<(), WasmDbError>;
-    pub async fn get(&self, key: &str) -> Result<Option<String>, WasmDbError>;
-    pub async fn remove(&self, key: &str) -> Result<(), WasmDbError>;
-    pub async fn keys(&self) -> Result<Vec<String>, WasmDbError>;
+    pub async fn new_internal<T: Into<String>>(path: T) -> Result<Self, WasmDbError>;
+    pub async fn set_internal(&self, key: String, value: String) -> Result<(), WasmDbError>;
+    pub async fn get_internal(&self, key: &str) -> Result<Option<String>, WasmDbError>;
+    pub async fn remove_internal(&self, key: &str) -> Result<(), WasmDbError>;
+    pub async fn keys_internal(&self) -> Result<Vec<String>, WasmDbError>;
 }
 
+// Native targets use cdk-sqlite (full CDK database functionality)
 impl WalletWasmDatabase {
+    pub async fn new(path: &str) -> Result<Self, Error>; // Full cdk-sqlite API
+    // ... all other cdk-sqlite methods
+}
+```
+
+### JavaScript API (via wasm-pack)
+
+For web projects using the wasm-pack generated bindings:
+
+```typescript
+class MintWasmDatabase {
+    constructor(path: string);
+    set(key: string, value: string): Promise<void>;
+    get(key: string): Promise<string | null>;
+    remove(key: string): Promise<void>;
+    keys(): Promise<string[]>;
+    free(): void; // Clean up WASM memory
+}
+
+class WalletWasmDatabase {
     // Same methods as MintWasmDatabase
 }
+
+class WasmDbError {
+    constructor(message: string);
+    message: string;
+}
+
+// Initialization functions
+function init(): void; // Called automatically
+function init_db(): Promise<void>; // Optional explicit init
 ```
 
 ### Cross-Platform
 
 ```rust
-pub async fn init(); // Safe to call on any target
+pub async fn init(); // Safe to call on any target (Rust)
 ```
 
 ## Requirements
