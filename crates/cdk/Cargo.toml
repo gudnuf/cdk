@@ -9,6 +9,8 @@ repository = "https://github.com/cashubtc/cdk.git"
 rust-version.workspace = true                                                            # MSRV
 license.workspace = true
 
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["mint", "wallet", "auth"]
@@ -38,6 +40,7 @@ serde_json.workspace = true
 serde_with.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+instant = { workspace = true, features = ["wasm-bindgen", "inaccurate"] }
 futures = { workspace = true, optional = true, features = ["alloc"] }
 url.workspace = true
 utoipa = { workspace = true, optional = true }
@@ -73,6 +76,7 @@ cdk-signatory = { workspace = true, default-features = false }
 getrandom = { version = "0.2", features = ["js"] }
 ring = { version = "0.17.14", features = ["wasm32_unknown_unknown_js"] }
 uuid = { workspace = true, features = ["js"] }
+js-sys = "0.3"
 
 [[example]]
 name = "mint-token"
@@ -110,6 +114,14 @@ tracing-subscriber.workspace = true
 criterion = "0.6.0"
 reqwest = { workspace = true }
 anyhow.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-test = "0.3"
+js-sys = "0.3"
+web-sys = "0.3"
+console_error_panic_hook = "0.1"
+cashu = { workspace = true }
 
 
 [[bench]]
