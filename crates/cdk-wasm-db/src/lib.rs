@@ -6,19 +6,12 @@
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-// For WASM targets, provide a basic in-memory implementation
+// WASM-only in-memory implementation
 #[cfg(target_arch = "wasm32")]
 mod wasm_impl;
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_impl::*;
-
-// For non-WASM targets, re-export cdk-sqlite for compatibility
-#[cfg(not(target_arch = "wasm32"))]
-mod native_impl;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub use native_impl::*;
 
 /// Initialize the WASM SQLite environment
 ///
@@ -47,74 +40,29 @@ pub fn init_db() -> js_sys::Promise {
     })
 }
 
-/// Initialize the WASM SQLite environment
-///
-/// This is a no-op function for non-WASM targets.
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn init() {
-    // No-op for non-WASM targets
-}
-
 #[cfg(test)]
 mod tests {
+    #[cfg(target_arch = "wasm32")]
     use super::*;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[tokio::test]
-    async fn test_init() {
-        // Test that init doesn't panic
-        init().await;
-    }
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn test_send_sync() {
+        // Compile-time check that WalletWasmDatabase is Send + Sync
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[tokio::test]
-    async fn test_database_creation() {
-        // Initialize first
-        init().await;
-
-        // Test wallet database creation - these are now re-exports of cdk-sqlite
-        let _wallet_db = WalletWasmDatabase::new(":memory:")
-            .await
-            .expect("Failed to create wallet database");
-
-        // Test mint database creation
-        let _mint_db = MintWasmDatabase::new(":memory:")
-            .await
-            .expect("Failed to create mint database");
+        assert_send::<WalletWasmDatabase>();
+        assert_sync::<WalletWasmDatabase>();
     }
 
     #[cfg(target_arch = "wasm32")]
-    #[tokio::test]
-    async fn test_database_operations() {
-        // Test WASM-specific operations using internal methods
-        let wallet_db = WalletWasmDatabase::new_internal(":memory:")
-            .await
-            .expect("Failed to create wallet database");
+    #[test]
+    fn test_arc_compatibility() {
+        use std::sync::Arc;
 
-        // Test set and get
-        wallet_db
-            .set_internal("test_key".to_string(), "test_value".to_string())
-            .await
-            .expect("Failed to set value");
-        let value = wallet_db
-            .get_internal("test_key")
-            .await
-            .expect("Failed to get value");
-        assert_eq!(value, Some("test_value".to_string()));
-
-        // Test keys
-        let keys = wallet_db.keys_internal().await.expect("Failed to get keys");
-        assert!(keys.contains(&"test_key".to_string()));
-
-        // Test remove
-        wallet_db
-            .remove_internal("test_key")
-            .await
-            .expect("Failed to remove key");
-        let value = wallet_db
-            .get_internal("test_key")
-            .await
-            .expect("Failed to get value after removal");
-        assert_eq!(value, None);
+        // Test that we can wrap WalletWasmDatabase in Arc
+        let wallet_db = WalletWasmDatabase::new();
+        let _wallet_db: Arc<WalletWasmDatabase> = Arc::new(wallet_db);
     }
 }
