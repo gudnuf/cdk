@@ -23,33 +23,68 @@ This crate provides database functionality that works across both native and Web
 ```rust
 use cdk_wasm_db::{MintWasmDatabase, WalletWasmDatabase};
 
-// Initialize the WASM environment (safe to call on native targets too)
-cdk_wasm_db::init().await;
+// Create databases using new async constructors
+let mint_db = MintWasmDatabase::new_async(":memory:").await.unwrap();
+let wallet_db = WalletWasmDatabase::new_async(":memory:").await.unwrap();
 
-// Create databases
-let mint_db = MintWasmDatabase::new("mint.db").await.unwrap();
-let wallet_db = WalletWasmDatabase::new("wallet.db").await.unwrap();
+// Alternative: synchronous constructor if you don't need async creation
+let wallet_db2 = WalletWasmDatabase::new_sync(":memory:").unwrap();
 
-// WASM targets: Use simple key-value operations
-#[cfg(target_arch = "wasm32")]
-{
-    wallet_db.set("key".to_string(), "value".to_string()).await.unwrap();
-    let value = wallet_db.get("key").await.unwrap();
-}
+// The databases implement the CDK WalletDatabase trait
+use cdk_common::database::WalletDatabase;
+use cdk_common::mint_url::MintUrl;
+use std::str::FromStr;
 
-// Native targets: Use full CDK database interface  
-#[cfg(not(target_arch = "wasm32"))]
-{
-    // Full CDK database operations available
-    // ...
-}
+let mint_url = MintUrl::from_str("https://mint.example.com").unwrap();
+wallet_db.add_mint(mint_url, None).await.unwrap();
 ```
 
 ### In-Memory Database
 
 ```rust
 // Both targets support in-memory mode
-let db = WalletWasmDatabase::new(":memory:").await.unwrap();
+let db = WalletWasmDatabase::new_async(":memory:").await.unwrap();
+```
+
+### Thread Safety (Optional)
+
+By default, the WASM implementation uses single-threaded storage (`Rc<RefCell<_>>`) which is suitable for most WASM environments. If you need thread-safe storage (e.g., for tests or specific multi-threaded WASM runtimes), enable the `threadsafe` feature:
+
+```toml
+[dependencies]
+cdk-wasm-db = { version = "0.11.0", features = ["threadsafe"] }
+```
+
+With this feature enabled, the storage will use `Arc<Mutex<_>>` for thread safety.
+
+### Constructor API Reference
+
+The crate provides multiple ways to create database instances:
+
+#### For Rust Code (Recommended)
+
+```rust
+use cdk_wasm_db::WalletWasmDatabase;
+
+// Async constructor - use when you need async initialization
+let db = WalletWasmDatabase::new_async(":memory:").await.unwrap();
+
+// Sync constructor - use when you don't need async initialization
+let db = WalletWasmDatabase::new_sync(":memory:").unwrap();
+```
+
+#### For JavaScript/TypeScript (via wasm-bindgen)
+
+```javascript
+// This returns a Promise in JavaScript
+const db = new WalletWasmDatabase(":memory:");
+```
+
+#### Deprecated API (Internal Use)
+
+```rust
+// These are deprecated but still work
+let db = WalletWasmDatabase::new_internal(":memory:".to_string()).await.unwrap();
 ```
 
 ### JavaScript/TypeScript Usage (via wasm-pack)

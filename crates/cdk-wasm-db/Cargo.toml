@@ -19,6 +19,8 @@ default = ["mint", "wallet", "auth"]
 mint = ["cdk-common/mint"]
 wallet = ["cdk-common/wallet"]
 auth = ["cdk-common/auth"]
+# Enable thread-safe storage even on WASM (useful for tests or multi-threaded WASM environments)
+threadsafe = []
 
 [dependencies]
 # Core dependencies that work on both native and WASM
@@ -39,6 +41,8 @@ sqlite-wasm-rs = { version = "0.4", default-features = false, features = ["preco
 # Minimal dependencies to avoid secp256k1 and other native deps
 uuid = { version = "1.17", features = ["v4", "js", "serde"] }
 url = "2.3"
+cdk-common = { workspace = true }
+cashu = { workspace = true }
 
 # Native-specific dependencies (fallback to cdk-sqlite)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
