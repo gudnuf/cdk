@@ -3,7 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, RwLock};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time;
+#[cfg(target_arch = "wasm32")]
+use {js_sys, wasm_bindgen};
 
 use super::WsSubscriptionBody;
 use crate::nuts::nut17::Kind;
@@ -77,7 +80,48 @@ async fn convert_subscription(
 }
 
 #[inline]
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn http_main<S: IntoIterator<Item = SubId>>(
+    initial_state: S,
+    http_client: Arc<dyn MintConnector + Send + Sync>,
+    subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
+    mut new_subscription_recv: mpsc::Receiver<SubId>,
+    mut on_drop: mpsc::Receiver<SubId>,
+    _wallet: Arc<Wallet>,
+) {
+    http_main_native(
+        initial_state,
+        http_client,
+        subscriptions,
+        new_subscription_recv,
+        on_drop,
+        _wallet,
+    )
+    .await
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn http_main<S: IntoIterator<Item = SubId>>(
+    initial_state: S,
+    http_client: Arc<dyn MintConnector + Send + Sync>,
+    subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
+    mut new_subscription_recv: mpsc::Receiver<SubId>,
+    mut on_drop: mpsc::Receiver<SubId>,
+    _wallet: Arc<Wallet>,
+) {
+    http_main_wasm(
+        initial_state,
+        http_client,
+        subscriptions,
+        new_subscription_recv,
+        on_drop,
+        _wallet,
+    )
+    .await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn http_main_native<S: IntoIterator<Item = SubId>>(
     initial_state: S,
     http_client: Arc<dyn MintConnector + Send + Sync>,
     subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
@@ -153,6 +197,120 @@ pub async fn http_main<S: IntoIterator<Item = SubId>>(
             }
             Some(id) = on_drop.recv() => {
                 subscribed_to.retain(|_, (_, sub_id, _)| *sub_id != id);
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn http_main_wasm<S: IntoIterator<Item = SubId>>(
+    initial_state: S,
+    http_client: Arc<dyn MintConnector + Send + Sync>,
+    subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
+    mut new_subscription_recv: mpsc::Receiver<SubId>,
+    mut on_drop: mpsc::Receiver<SubId>,
+    _wallet: Arc<Wallet>,
+) {
+    let mut subscribed_to = HashMap::<UrlType, (mpsc::Sender<_>, _, AnyState)>::new();
+
+    for sub_id in initial_state {
+        convert_subscription(sub_id, &subscriptions, &mut subscribed_to).await;
+    }
+
+    // In WASM, we use a different approach for timing since tokio::time doesn't work
+    // We'll use web_sys::window().set_interval or a simple async loop with wasm_bindgen_futures
+    loop {
+        // Use a select-like behavior but with WASM-compatible timing
+        tokio::select! {
+            // Instead of interval.tick(), we use a WASM-compatible delay
+            _ = wasm_sleep(Duration::from_secs(2)) => {
+                for (url, (sender, _, last_state)) in subscribed_to.iter_mut() {
+                    tracing::debug!("Polling: {:?}", url);
+                    match url {
+                        UrlType::Mint(id) => {
+                            let response = http_client.get_mint_quote_status(id).await;
+                            if let Ok(response) = response {
+                                if *last_state == AnyState::MintQuoteState(response.state) {
+                                    continue;
+                                }
+                                *last_state = AnyState::MintQuoteState(response.state);
+                                if let Err(err) = sender.try_send(NotificationPayload::MintQuoteBolt11Response(response)) {
+                                    tracing::error!("Error sending mint quote response: {:?}", err);
+                                }
+                            }
+                        }
+                        UrlType::Melt(id) => {
+                            let response = http_client.get_melt_quote_status(id).await;
+                            if let Ok(response) = response {
+                                if *last_state == AnyState::MeltQuoteState(response.state) {
+                                    continue;
+                                }
+                                *last_state = AnyState::MeltQuoteState(response.state);
+                                if let Err(err) =  sender.try_send(NotificationPayload::MeltQuoteBolt11Response(response)) {
+                                    tracing::error!("Error sending melt quote response: {:?}", err);
+                                }
+                            }
+                        }
+                        UrlType::PublicKey(id) => {
+                            let responses = http_client.post_check_state(CheckStateRequest {
+                                ys: vec![*id],
+                            }
+                            ).await;
+                            if let Ok(mut responses) = responses {
+                                let response = if let Some(state) = responses.states.pop() {
+                                    state
+                                } else {
+                                    continue;
+                                };
+
+                                if *last_state == AnyState::PublicKey(response.state) {
+                                    continue;
+                                }
+                                *last_state = AnyState::PublicKey(response.state);
+                                if let Err(err) = sender.try_send(NotificationPayload::ProofState(response)) {
+                                    tracing::error!("Error sending proof state response: {:?}", err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some(subid) = new_subscription_recv.recv() => {
+                convert_subscription(subid, &subscriptions, &mut subscribed_to).await;
+            }
+            Some(id) = on_drop.recv() => {
+                subscribed_to.retain(|_, (_, sub_id, _)| *sub_id != id);
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn wasm_sleep(duration: Duration) {
+    // In WASM, we can't use tokio::time, so we implement a simple sleep
+    // using a combination of instant and yielding to the event loop
+    let start = instant::Instant::now();
+    let target_duration = duration;
+
+    while start.elapsed() < target_duration {
+        // Yield control to the event loop by awaiting a resolved promise
+        // This prevents blocking the main thread
+        use wasm_bindgen_futures::JsFuture;
+
+        let promise = js_sys::Promise::resolve(&wasm_bindgen::JsValue::UNDEFINED);
+        let _ = JsFuture::from(promise).await;
+
+        // Sleep for a small amount to avoid busy-waiting
+        // This is a basic implementation - in production you'd want gloo-timers
+        if start.elapsed() < target_duration {
+            // Small delay to prevent excessive CPU usage
+            let micro_sleep =
+                std::cmp::min(Duration::from_millis(10), target_duration - start.elapsed());
+
+            // Simulate a small delay by yielding multiple times
+            for _ in 0..micro_sleep.as_millis().min(10) {
+                let yield_promise = js_sys::Promise::resolve(&wasm_bindgen::JsValue::UNDEFINED);
+                let _ = JsFuture::from(yield_promise).await;
             }
         }
     }

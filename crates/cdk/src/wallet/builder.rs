@@ -124,7 +124,7 @@ impl WalletBuilder {
             .seed
             .ok_or(Error::Custom("Seed required".to_string()))?;
 
-        let client = match self.client {
+        let client: Arc<dyn MintConnector + Send + Sync> = match self.client {
             Some(client) => client,
             None => {
                 #[cfg(feature = "auth")]

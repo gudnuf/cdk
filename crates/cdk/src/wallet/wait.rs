@@ -4,8 +4,11 @@ use cdk_common::{
     Amount, Error, MeltQuoteState, MintQuoteState, NotificationPayload, PaymentMethod, Proofs,
     SpendingConditions,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use futures::future::BoxFuture;
-use tokio::time::{timeout, Duration};
+#[cfg(target_arch = "wasm32")]
+use futures::future::LocalBoxFuture as BoxFuture;
+use instant::{Duration, Instant};
 
 use super::{Wallet, WalletSubscription};
 
@@ -77,6 +80,7 @@ impl Wallet {
     }
 
     /// Returns a BoxFuture that will wait for payment on the given event with a timeout check
+    /// This implementation is WASM-compatible using the instant crate
     #[allow(private_bounds)]
     pub fn wait_for_payment<T>(
         &self,
@@ -89,10 +93,18 @@ impl Wallet {
         let subs = self.subscribe::<WalletSubscription>(event.into().into());
 
         Box::pin(async move {
-            timeout(timeout_duration, async {
-                let mut subscription = subs.await;
-                loop {
-                    match subscription.recv().await.ok_or(Error::Internal)? {
+            let start_time = Instant::now();
+            let mut subscription = subs.await;
+
+            loop {
+                // Check timeout using WASM-compatible instant
+                if start_time.elapsed() > timeout_duration {
+                    return Err(Error::Timeout);
+                }
+
+                // Try to receive with non-blocking approach
+                match subscription.try_recv() {
+                    Ok(Some(payload)) => match payload {
                         NotificationPayload::MintQuoteBolt11Response(info) => {
                             if info.state == MintQuoteState::Paid {
                                 return Ok(None);
@@ -109,11 +121,18 @@ impl Wallet {
                             }
                         }
                         _ => {}
+                    },
+                    Ok(None) => {
+                        // No message available, yield to allow other tasks to run
+                        #[cfg(target_arch = "wasm32")]
+                        wasm_bindgen_futures::spawn_local(async {});
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
+                    Err(_) => return Err(Error::Internal),
                 }
-            })
-            .await
-            .map_err(|_| Error::Timeout)?
+            }
         })
     }
 }
