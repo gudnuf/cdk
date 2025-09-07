@@ -712,3 +712,15 @@ impl AuthMintConnector for AuthHttpClient {
             .await
     }
 }
+
+// WASM-specific Send implementations
+// These types are actually Send on WASM since all their fields are Send,
+// but the trait object dyn MintConnector is not Send due to ?Send in async_trait
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for HttpClientCore {}
+
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for HttpClient {}
+
+#[cfg(all(target_arch = "wasm32", feature = "auth"))]
+unsafe impl Send for AuthHttpClient {}

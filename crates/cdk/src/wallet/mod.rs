@@ -80,6 +80,9 @@ pub struct Wallet {
     #[cfg(feature = "auth")]
     auth_wallet: Arc<RwLock<Option<AuthWallet>>>,
     seed: [u8; 64],
+    #[cfg(not(target_arch = "wasm32"))]
+    client: Arc<dyn MintConnector + Send + Sync>,
+    #[cfg(target_arch = "wasm32")]
     client: Arc<dyn MintConnector + Send + Sync>,
     subscription: SubscriptionManager,
 }
