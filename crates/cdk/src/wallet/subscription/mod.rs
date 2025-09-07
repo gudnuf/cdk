@@ -506,6 +506,7 @@ impl SubscriptionClient {
         feature = "mint",
         target_arch = "wasm32"
     ))]
+    #[allow(dead_code)]
     fn ws_wasm_worker(
         http_client: Arc<dyn MintConnector + Send + Sync>,
         url: MintUrl,
