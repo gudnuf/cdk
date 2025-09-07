@@ -120,6 +120,7 @@ pub async fn ws_main(
 
         tracing::debug!("Connected to {}", url);
         failure_count = 0;
+        tracing::debug!("Reset failure count to {}", failure_count);
 
         let (mut write, mut read) = ws_stream.split();
         let req_id = AtomicUsize::new(0);

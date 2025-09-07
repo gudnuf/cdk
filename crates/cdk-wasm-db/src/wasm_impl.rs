@@ -29,11 +29,13 @@ pub struct WasmDbError {
 
 #[wasm_bindgen]
 impl WasmDbError {
+    /// Create a new WASM database error with the given message
     #[wasm_bindgen(constructor)]
     pub fn new(message: String) -> WasmDbError {
         WasmDbError { message }
     }
 
+    /// Get the error message
     #[wasm_bindgen(getter)]
     pub fn message(&self) -> String {
         self.message.clone()

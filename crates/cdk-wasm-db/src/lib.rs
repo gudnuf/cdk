@@ -13,6 +13,13 @@ mod wasm_impl;
 #[cfg(target_arch = "wasm32")]
 pub use wasm_impl::*;
 
+// Native stub implementation (for compilation only)
+#[cfg(not(target_arch = "wasm32"))]
+mod native_stub;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use native_stub::*;
+
 /// Initialize the WASM SQLite environment
 ///
 /// This function must be called before using any database functionality

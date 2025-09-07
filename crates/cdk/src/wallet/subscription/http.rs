@@ -85,8 +85,8 @@ pub async fn http_main<S: IntoIterator<Item = SubId>>(
     initial_state: S,
     http_client: Arc<dyn MintConnector + Send + Sync>,
     subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
-    mut new_subscription_recv: mpsc::Receiver<SubId>,
-    mut on_drop: mpsc::Receiver<SubId>,
+    new_subscription_recv: mpsc::Receiver<SubId>,
+    on_drop: mpsc::Receiver<SubId>,
     _wallet: Arc<Wallet>,
 ) {
     http_main_native(
@@ -105,8 +105,8 @@ pub async fn http_main<S: IntoIterator<Item = SubId>>(
     initial_state: S,
     http_client: Arc<dyn MintConnector + Send + Sync>,
     subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
-    mut new_subscription_recv: mpsc::Receiver<SubId>,
-    mut on_drop: mpsc::Receiver<SubId>,
+    new_subscription_recv: mpsc::Receiver<SubId>,
+    on_drop: mpsc::Receiver<SubId>,
     _wallet: Arc<Wallet>,
 ) {
     http_main_wasm(
