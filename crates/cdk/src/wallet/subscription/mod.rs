@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use cdk_common::subscription::Params;
 use tokio::sync::{mpsc, RwLock};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::task::JoinHandle;
 use tracing::error;
 
@@ -26,6 +27,12 @@ mod http;
     not(target_arch = "wasm32")
 ))]
 mod ws;
+#[cfg(all(
+    not(feature = "http_subscription"),
+    feature = "mint",
+    target_arch = "wasm32"
+))]
+mod ws_wasm;
 
 type WsSubscriptionBody = (mpsc::Sender<NotificationPayload>, Params);
 
@@ -45,6 +52,29 @@ type WsSubscriptionBody = (mpsc::Sender<NotificationPayload>, Params);
 /// ActiveSubscription struct, which can be used to receive updates and to
 /// unsubscribe from updates automatically on the drop.
 #[derive(Debug, Clone)]
+#[cfg(not(target_arch = "wasm32"))]
+pub struct SubscriptionManager {
+    all_connections: Arc<RwLock<HashMap<MintUrl, SubscriptionClient>>>,
+    http_client: Arc<dyn MintConnector + Send + Sync>,
+}
+
+/// Subscription manager for WASM targets
+///
+/// This structure should be instantiated once per wallet at most. It is
+/// cloneable since all its members are Arcs.
+///
+/// The main goal is to provide a single interface to manage multiple
+/// subscriptions to many servers to subscribe to events. If supported, the
+/// WebSocket method is used to subscribe to server-side events. Otherwise, a
+/// poll-based system is used, where a background task fetches information about
+/// the resource every few seconds and notifies subscribers of any change
+/// upstream.
+///
+/// The subscribers have a simple-to-use interface, receiving an
+/// ActiveSubscription struct, which can be used to receive updates and to
+/// unsubscribe from updates automatically on the drop.
+#[derive(Debug, Clone)]
+#[cfg(target_arch = "wasm32")]
 pub struct SubscriptionManager {
     all_connections: Arc<RwLock<HashMap<MintUrl, SubscriptionClient>>>,
     http_client: Arc<dyn MintConnector + Send + Sync>,
@@ -52,6 +82,16 @@ pub struct SubscriptionManager {
 
 impl SubscriptionManager {
     /// Create a new subscription manager
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new(http_client: Arc<dyn MintConnector + Send + Sync>) -> Self {
+        Self {
+            all_connections: Arc::new(RwLock::new(HashMap::new())),
+            http_client,
+        }
+    }
+
+    /// Create a new subscription manager
+    #[cfg(target_arch = "wasm32")]
     pub fn new(http_client: Arc<dyn MintConnector + Send + Sync>) -> Self {
         Self {
             all_connections: Arc::new(RwLock::new(HashMap::new())),
@@ -74,24 +114,16 @@ impl SubscriptionManager {
         } else {
             drop(subscription_clients);
 
-            #[cfg(all(
-                not(feature = "http_subscription"),
-                feature = "mint",
-                not(target_arch = "wasm32")
-            ))]
-            let is_ws_support = self
-                .http_client
-                .get_mint_info()
-                .await
-                .map(|info| !info.nuts.nut17.supported.is_empty())
-                .unwrap_or_default();
-
-            #[cfg(any(
-                feature = "http_subscription",
-                not(feature = "mint"),
-                target_arch = "wasm32"
-            ))]
-            let is_ws_support = false;
+            let is_ws_support = if cfg!(all(not(feature = "http_subscription"), feature = "mint")) {
+                self.http_client
+                    .get_mint_info()
+                    .await
+                    .map(|info| !info.nuts.nut17.supported.is_empty())
+                    .unwrap_or(false)
+            } else {
+                // Fallback for http_subscription or non-mint builds
+                false
+            };
 
             tracing::debug!(
                 "Connect to {:?} to subscribe. WebSocket is supported ({})",
@@ -124,7 +156,10 @@ pub struct SubscriptionClient {
     new_subscription_notif: mpsc::Sender<SubId>,
     on_drop_notif: mpsc::Sender<SubId>,
     subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
+    #[cfg(not(target_arch = "wasm32"))]
     worker: Option<JoinHandle<()>>,
+    #[cfg(target_arch = "wasm32")]
+    worker: Option<()>, // No JoinHandle needed in WASM since we can't cancel anyway
 }
 
 type NotificationPayload = crate::nuts::NotificationPayload<String>;
@@ -185,6 +220,7 @@ pub enum Error {
 
 impl SubscriptionClient {
     /// Create new [`SubscriptionClient`]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         url: MintUrl,
         http_client: Arc<dyn MintConnector + Send + Sync>,
@@ -211,7 +247,38 @@ impl SubscriptionClient {
         }
     }
 
+    /// Create new [`SubscriptionClient`] for WASM targets
+    #[cfg(target_arch = "wasm32")]
+    pub fn new(
+        url: MintUrl,
+        http_client: Arc<dyn MintConnector + Send + Sync>,
+        prefer_ws_method: bool,
+        wallet: Arc<Wallet>,
+    ) -> Self {
+        let subscriptions = Arc::new(RwLock::new(HashMap::new()));
+        let (new_subscription_notif, new_subscription_recv) = mpsc::channel(100);
+        let (on_drop_notif, on_drop_recv) = mpsc::channel(1000);
+
+        Self::start_worker(
+            prefer_ws_method,
+            http_client,
+            url,
+            subscriptions.clone(),
+            new_subscription_recv,
+            on_drop_recv,
+            wallet,
+        );
+
+        Self {
+            new_subscription_notif,
+            on_drop_notif,
+            subscriptions,
+            worker: Some(()),
+        }
+    }
+
     #[allow(unused_variables)]
+    #[cfg(not(target_arch = "wasm32"))]
     fn start_worker(
         prefer_ws_method: bool,
         http_client: Arc<dyn MintConnector + Send + Sync>,
@@ -221,11 +288,7 @@ impl SubscriptionClient {
         on_drop_recv: mpsc::Receiver<SubId>,
         wallet: Arc<Wallet>,
     ) -> JoinHandle<()> {
-        #[cfg(any(
-            feature = "http_subscription",
-            not(feature = "mint"),
-            target_arch = "wasm32"
-        ))]
+        #[cfg(feature = "http_subscription")]
         return Self::http_worker(
             http_client,
             subscriptions,
@@ -257,6 +320,89 @@ impl SubscriptionClient {
                 wallet,
             )
         }
+
+        #[cfg(all(
+            not(feature = "http_subscription"),
+            feature = "mint",
+            target_arch = "wasm32"
+        ))]
+        if prefer_ws_method {
+            Self::ws_wasm_worker(
+                http_client,
+                url,
+                subscriptions,
+                new_subscription_recv,
+                on_drop_recv,
+                wallet,
+            )
+        } else {
+            Self::http_worker(
+                http_client,
+                subscriptions,
+                new_subscription_recv,
+                on_drop_recv,
+                wallet,
+            )
+        }
+
+        #[cfg(not(feature = "mint"))]
+        Self::http_worker(
+            http_client,
+            subscriptions,
+            new_subscription_recv,
+            on_drop_recv,
+            wallet,
+        )
+    }
+
+    #[allow(unused_variables)]
+    #[cfg(target_arch = "wasm32")]
+    fn start_worker(
+        prefer_ws_method: bool,
+        http_client: Arc<dyn MintConnector + Send + Sync>,
+        url: MintUrl,
+        subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
+        new_subscription_recv: mpsc::Receiver<SubId>,
+        on_drop_recv: mpsc::Receiver<SubId>,
+        wallet: Arc<Wallet>,
+    ) {
+        #[cfg(feature = "http_subscription")]
+        return Self::http_worker_wasm(
+            http_client,
+            subscriptions,
+            new_subscription_recv,
+            on_drop_recv,
+            wallet,
+        );
+
+        #[cfg(all(not(feature = "http_subscription"), feature = "mint"))]
+        if prefer_ws_method {
+            Self::ws_wasm_worker_wasm(
+                http_client,
+                url,
+                subscriptions,
+                new_subscription_recv,
+                on_drop_recv,
+                wallet,
+            )
+        } else {
+            Self::http_worker_wasm(
+                http_client,
+                subscriptions,
+                new_subscription_recv,
+                on_drop_recv,
+                wallet,
+            )
+        }
+
+        #[cfg(not(feature = "mint"))]
+        Self::http_worker_wasm(
+            http_client,
+            subscriptions,
+            new_subscription_recv,
+            on_drop_recv,
+            wallet,
+        );
     }
 
     /// Subscribe to a WebSocket channel
@@ -279,6 +425,7 @@ impl SubscriptionClient {
     ///
     /// This is a poll based subscription, where the client will poll the server
     /// from time to time to get updates, notifying the subscribers on changes
+    #[cfg(not(target_arch = "wasm32"))]
     fn http_worker(
         http_client: Arc<dyn MintConnector + Send + Sync>,
         subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
@@ -295,16 +442,35 @@ impl SubscriptionClient {
             wallet,
         );
 
-        #[cfg(target_arch = "wasm32")]
-        let ret = tokio::task::spawn_local(http_worker);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let ret = tokio::spawn(http_worker);
-
-        ret
+        tokio::spawn(http_worker)
     }
 
-    /// WebSocket subscription client
+    /// HTTP subscription client for WASM
+    ///
+    /// This is a poll based subscription, where the client will poll the server
+    /// from time to time to get updates, notifying the subscribers on changes
+    #[cfg(target_arch = "wasm32")]
+    fn http_worker_wasm(
+        http_client: Arc<dyn MintConnector + Send + Sync>,
+        subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
+        new_subscription_recv: mpsc::Receiver<SubId>,
+        on_drop: mpsc::Receiver<SubId>,
+        wallet: Arc<Wallet>,
+    ) {
+        let http_worker = http::http_main(
+            vec![],
+            http_client,
+            subscriptions,
+            new_subscription_recv,
+            on_drop,
+            wallet,
+        );
+
+        // In WASM, we use wasm_bindgen_futures::spawn_local since tokio::spawn is not available
+        wasm_bindgen_futures::spawn_local(http_worker);
+    }
+
+    /// WebSocket subscription client (native)
     ///
     /// This is a WebSocket based subscription, where the client will connect to
     /// the server and stay there idle waiting for server-side notifications
@@ -330,12 +496,77 @@ impl SubscriptionClient {
             wallet,
         ))
     }
+
+    /// WebSocket subscription client (WASM)
+    ///
+    /// This is a WebSocket based subscription for WASM, where the client will connect to
+    /// the server using browser WebSocket APIs and stay there idle waiting for server-side notifications
+    #[cfg(all(
+        not(feature = "http_subscription"),
+        feature = "mint",
+        target_arch = "wasm32"
+    ))]
+    #[allow(dead_code)]
+    fn ws_wasm_worker(
+        http_client: Arc<dyn MintConnector + Send + Sync>,
+        url: MintUrl,
+        subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
+        new_subscription_recv: mpsc::Receiver<SubId>,
+        on_drop: mpsc::Receiver<SubId>,
+        wallet: Arc<Wallet>,
+    ) {
+        wasm_bindgen_futures::spawn_local(ws_wasm::ws_main(
+            http_client,
+            url,
+            subscriptions,
+            new_subscription_recv,
+            on_drop,
+            wallet,
+        ))
+    }
+
+    /// WebSocket subscription client for WASM (spawn_local version)
+    ///
+    /// This version uses wasm_bindgen_futures::spawn_local for the WASM start_worker method
+    #[cfg(all(
+        not(feature = "http_subscription"),
+        feature = "mint",
+        target_arch = "wasm32"
+    ))]
+    fn ws_wasm_worker_wasm(
+        http_client: Arc<dyn MintConnector + Send + Sync>,
+        url: MintUrl,
+        subscriptions: Arc<RwLock<HashMap<SubId, WsSubscriptionBody>>>,
+        new_subscription_recv: mpsc::Receiver<SubId>,
+        on_drop: mpsc::Receiver<SubId>,
+        wallet: Arc<Wallet>,
+    ) {
+        let ws_worker = ws_wasm::ws_main(
+            http_client,
+            url,
+            subscriptions,
+            new_subscription_recv,
+            on_drop,
+            wallet,
+        );
+
+        // In WASM, we use wasm_bindgen_futures::spawn_local since tokio::spawn is not available
+        wasm_bindgen_futures::spawn_local(ws_worker);
+    }
 }
 
 impl Drop for SubscriptionClient {
     fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(sender) = self.worker.take() {
             sender.abort();
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            // In WASM, we can't cancel tasks spawned with wasm_bindgen_futures::spawn_local
+            // so we just take the worker value to satisfy the Option
+            let _ = self.worker.take();
         }
     }
 }

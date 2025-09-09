@@ -303,11 +303,16 @@ check-wasm *ARGS="--target wasm32-unknown-unknown":
     cd {{invocation_directory()}}
   fi
 
+  # Set environment variables to fix Nix hardening issues with WASM compilation
+  export NIX_HARDENING_ENABLE=""
+  export CC_wasm32_unknown_unknown=/usr/bin/clang
+
   buildargs=(
     "-p cdk"
     "-p cdk --no-default-features"
     "-p cdk --no-default-features --features wallet"
     "-p cdk --no-default-features --features mint"
+    "-p cdk-wasm-db"
   )
 
   for arg in "${buildargs[@]}"; do
