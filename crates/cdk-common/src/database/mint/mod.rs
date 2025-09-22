@@ -264,6 +264,8 @@ pub trait ProofsDatabase {
         &self,
         keyset_id: &Id,
     ) -> Result<(Proofs, Vec<Option<State>>), Self::Err>;
+    /// Get all spent secrets
+    async fn get_spent_secrets(&self) -> Result<Vec<String>, Self::Err>;
 }
 
 #[async_trait]

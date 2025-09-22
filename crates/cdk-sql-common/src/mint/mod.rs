@@ -1464,6 +1464,22 @@ where
         .into_iter()
         .unzip())
     }
+
+    async fn get_spent_secrets(&self) -> Result<Vec<String>, Self::Err> {
+        let conn = self.pool.get().map_err(|e| Error::Database(Box::new(e)))?;
+        Ok(query(
+            r#"
+            SELECT secret
+            FROM proof
+            WHERE state = 'SPENT'
+            "#,
+        )?
+        .fetch_all(&*conn)
+        .await?
+        .into_iter()
+        .map(|row| Ok::<String, Error>(column_as_string!(&row[0])))
+        .collect::<Result<Vec<String>, _>>()?)
+    }
 }
 
 #[async_trait]

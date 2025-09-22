@@ -110,3 +110,11 @@ pub struct CheckStateResponse {
     /// Proof states
     pub states: Vec<ProofState>,
 }
+
+/// Spent Secrets Response
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "swagger", derive(utoipa::ToSchema))]
+pub struct SpentSecretsResponse {
+    /// Spent secrets as UTF-8 strings
+    pub secrets: Vec<String>,
+}

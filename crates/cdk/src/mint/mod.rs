@@ -722,6 +722,12 @@ impl Mint {
             .next()
     }
 
+    /// Get all spent secrets
+    #[instrument(skip_all)]
+    pub async fn get_spent_secrets(&self) -> Result<Vec<String>, Error> {
+        Ok(self.localstore.get_spent_secrets().await?)
+    }
+
     /// Blind Sign
     #[tracing::instrument(skip_all)]
     pub async fn blind_sign(

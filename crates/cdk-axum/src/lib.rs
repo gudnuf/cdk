@@ -39,7 +39,9 @@ mod swagger_imports {
     pub use cdk::nuts::nut04::{MintMethodSettings, MintRequest, MintResponse};
     pub use cdk::nuts::nut05::{MeltMethodSettings, MeltRequest};
     pub use cdk::nuts::nut06::{ContactInfo, MintInfo, MintVersion, Nuts, SupportedSettings};
-    pub use cdk::nuts::nut07::{CheckStateRequest, CheckStateResponse, ProofState, State};
+    pub use cdk::nuts::nut07::{
+        CheckStateRequest, CheckStateResponse, ProofState, SpentSecretsResponse, State,
+    };
     pub use cdk::nuts::nut09::{RestoreRequest, RestoreResponse};
     pub use cdk::nuts::nut11::P2PKWitness;
     pub use cdk::nuts::nut12::{BlindSignatureDleq, ProofDleq};
@@ -152,6 +154,7 @@ define_api_doc! {
         RestoreRequest,
         RestoreResponse,
         SecretKey,
+        SpentSecretsResponse,
         State,
         SupportedSettings,
         SwapRequest,
@@ -208,6 +211,7 @@ define_api_doc! {
         RestoreRequest,
         RestoreResponse,
         SecretKey,
+        SpentSecretsResponse,
         State,
         SupportedSettings,
         SwapRequest,
@@ -306,6 +310,7 @@ pub async fn create_mint_router_with_custom_cache(
         .route("/melt/bolt11", post(cache_post_melt_bolt11))
         .route("/checkstate", post(post_check))
         .route("/info", get(get_mint_info))
+        .route("/spent-secrets", get(get_spent_secrets))
         .route("/restore", post(post_restore));
 
     let mint_router = Router::new().nest("/v1", v1_router);

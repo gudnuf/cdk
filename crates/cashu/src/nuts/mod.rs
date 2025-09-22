@@ -52,7 +52,7 @@ pub use nut05::{
     MeltMethodSettings, MeltRequest, QuoteState as MeltQuoteState, Settings as NUT05Settings,
 };
 pub use nut06::{ContactInfo, MintInfo, MintVersion, Nuts};
-pub use nut07::{CheckStateRequest, CheckStateResponse, ProofState, State};
+pub use nut07::{CheckStateRequest, CheckStateResponse, ProofState, SpentSecretsResponse, State};
 pub use nut09::{RestoreRequest, RestoreResponse};
 pub use nut10::{Kind, Secret as Nut10Secret, SecretData};
 pub use nut11::{Conditions, P2PKWitness, SigFlag, SpendingConditions};

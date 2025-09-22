@@ -11,7 +11,7 @@ use cdk::nuts::{
     CheckStateRequest, CheckStateResponse, Id, KeysResponse, KeysetResponse,
     MeltQuoteBolt11Request, MeltQuoteBolt11Response, MeltRequest, MintInfo, MintQuoteBolt11Request,
     MintQuoteBolt11Response, MintRequest, MintResponse, RestoreRequest, RestoreResponse,
-    SwapRequest, SwapResponse,
+    SpentSecretsResponse, SwapRequest, SwapResponse,
 };
 use cdk::util::unix_time;
 use paste::paste;
@@ -453,6 +453,31 @@ pub(crate) async fn get_mint_info(
             .clone()
             .time(unix_time()),
     ))
+}
+
+#[cfg_attr(feature = "swagger", utoipa::path(
+    get,
+    context_path = "/v1",
+    path = "/spent-secrets",
+    responses(
+        (status = 200, description = "Successful response", body = SpentSecretsResponse, content_type = "application/json"),
+        (status = 500, description = "Server error", body = ErrorResponse, content_type = "application/json")
+    )
+))]
+/// Get all spent secrets from the mint database
+///
+/// Returns all secrets that have been marked as SPENT in the mint database as UTF-8 decoded strings.
+/// This allows clients to efficiently search through spent secrets to prevent double spending.
+#[instrument(skip_all)]
+pub(crate) async fn get_spent_secrets(
+    State(state): State<MintState>,
+) -> Result<Json<SpentSecretsResponse>, Response> {
+    let secrets = state.mint.get_spent_secrets().await.map_err(|err| {
+        tracing::error!("Could not get spent secrets: {}", err);
+        into_response(err)
+    })?;
+
+    Ok(Json(SpentSecretsResponse { secrets }))
 }
 
 #[cfg_attr(feature = "swagger", utoipa::path(
