@@ -26,8 +26,9 @@ pub struct CreateRequestSubCommand {
     /// - nostr: Use Nostr transport and listen for payment
     /// - http: Use HTTP transport but only print the request
     /// - none: Don't use any transport, just print the request
-    #[arg(long, default_value = "nostr")]
-    transport: String,
+    ///   If not specified, no transport will be used
+    #[arg(long)]
+    transport: Option<String>,
     /// URL for HTTP transport (only used when transport=http)
     #[arg(long)]
     http_url: Option<String>,
@@ -51,7 +52,10 @@ pub async fn create_request(
         num_sigs: sub_command_args.num_sigs,
         hash: sub_command_args.hash.clone(),
         preimage: sub_command_args.preimage.clone(),
-        transport: sub_command_args.transport.to_lowercase(),
+        transport: sub_command_args
+            .transport
+            .as_ref()
+            .map(|s| s.to_lowercase()),
         http_url: sub_command_args.http_url.clone(),
         nostr_relays: sub_command_args.nostr_relay.clone(),
     };

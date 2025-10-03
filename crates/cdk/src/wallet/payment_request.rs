@@ -197,9 +197,10 @@ pub struct CreateRequestParams {
     pub hash: Option<String>, // HTLC hash
     /// Optional HTLC preimage (mutually exclusive with `hash`)
     pub preimage: Option<String>, // HTLC preimage
-    /// Transport type for the request: "nostr", "http", or "none"
-    pub transport: String, // "nostr", "http", or "none"
-    /// Target URL for HTTP transport (required if `transport == http`)
+    /// Optional transport type for the request: "nostr", "http", or "none"
+    /// If None, no transport will be attached to the request
+    pub transport: Option<String>, // "nostr", "http", or "none"
+    /// Target URL for HTTP transport (required if `transport == Some("http")`)
     pub http_url: Option<String>, // when transport == http
     /// List of Nostr relay URLs to include in the nprofile (used if `transport == nostr`)
     pub nostr_relays: Option<Vec<String>>, // when transport == nostr
@@ -363,63 +364,66 @@ impl MultiMintWallet {
             .collect::<Vec<_>>();
 
         // Transports
-        let transport_type = params.transport.to_lowercase();
-        let (transports, nostr_info): (Vec<Transport>, Option<NostrWaitInfo>) =
-            match transport_type.as_str() {
-                "nostr" => {
-                    let keys = Keys::generate();
-                    let relays = if let Some(custom_relays) = &params.nostr_relays {
-                        if !custom_relays.is_empty() {
-                            custom_relays.clone()
-                        } else {
-                            return Err(Error::Custom("No relays provided".to_string()));
-                        }
+        let (transports, nostr_info): (Vec<Transport>, Option<NostrWaitInfo>) = match params
+            .transport
+            .as_deref()
+            .map(|s| s.to_lowercase())
+            .as_deref()
+        {
+            Some("nostr") => {
+                let keys = Keys::generate();
+                let relays = if let Some(custom_relays) = &params.nostr_relays {
+                    if !custom_relays.is_empty() {
+                        custom_relays.clone()
                     } else {
                         return Err(Error::Custom("No relays provided".to_string()));
-                    };
-
-                    // Parse relay URLs for nprofile
-                    let relay_urls = relays
-                        .iter()
-                        .map(|r| RelayUrl::parse(r))
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(|e| Error::Custom(format!("Couldn't parse relays: {e}")))?;
-
-                    let nprofile =
-                        nostr_sdk::nips::nip19::Nip19Profile::new(keys.public_key, relay_urls);
-                    let nostr_transport = Transport {
-                        _type: TransportType::Nostr,
-                        target: nprofile.to_bech32().map_err(|e| {
-                            Error::Custom(format!("Couldn't convert nprofile to bech32: {e}"))
-                        })?,
-                        tags: Some(vec![vec!["n".to_string(), "17".to_string()]]),
-                    };
-
-                    (
-                        vec![nostr_transport],
-                        Some(NostrWaitInfo {
-                            keys,
-                            relays,
-                            pubkey: nprofile.public_key,
-                        }),
-                    )
-                }
-                "http" => {
-                    if let Some(url) = &params.http_url {
-                        let http_transport = Transport {
-                            _type: TransportType::HttpPost,
-                            target: url.clone(),
-                            tags: None,
-                        };
-                        (vec![http_transport], None)
-                    } else {
-                        // No URL provided, skip transport
-                        (vec![], None)
                     }
+                } else {
+                    return Err(Error::Custom("No relays provided".to_string()));
+                };
+
+                // Parse relay URLs for nprofile
+                let relay_urls = relays
+                    .iter()
+                    .map(|r| RelayUrl::parse(r))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| Error::Custom(format!("Couldn't parse relays: {e}")))?;
+
+                let nprofile =
+                    nostr_sdk::nips::nip19::Nip19Profile::new(keys.public_key, relay_urls);
+                let nostr_transport = Transport {
+                    _type: TransportType::Nostr,
+                    target: nprofile.to_bech32().map_err(|e| {
+                        Error::Custom(format!("Couldn't convert nprofile to bech32: {e}"))
+                    })?,
+                    tags: Some(vec![vec!["n".to_string(), "17".to_string()]]),
+                };
+
+                (
+                    vec![nostr_transport],
+                    Some(NostrWaitInfo {
+                        keys,
+                        relays,
+                        pubkey: nprofile.public_key,
+                    }),
+                )
+            }
+            Some("http") => {
+                if let Some(url) = &params.http_url {
+                    let http_transport = Transport {
+                        _type: TransportType::HttpPost,
+                        target: url.clone(),
+                        tags: None,
+                    };
+                    (vec![http_transport], None)
+                } else {
+                    // No URL provided, skip transport
+                    (vec![], None)
                 }
-                "none" => (vec![], None),
-                _ => (vec![], None),
-            };
+            }
+            Some("none") | None => (vec![], None),
+            _ => (vec![], None),
+        };
 
         let nut10 = self
             .get_pr_spending_conditions(&params)?
@@ -465,14 +469,18 @@ impl MultiMintWallet {
             .collect::<Vec<_>>();
 
         // Transports
-        let transport_type = params.transport.to_lowercase();
-        let transports: Vec<Transport> = match transport_type.as_str() {
-            "nostr" => {
+        let transports: Vec<Transport> = match params
+            .transport
+            .as_deref()
+            .map(|s| s.to_lowercase())
+            .as_deref()
+        {
+            Some("nostr") => {
                 return Err(Error::Custom(
                     "Nostr is not supported in this build".to_string(),
                 ))
             }
-            "http" => {
+            Some("http") => {
                 if let Some(url) = &params.http_url {
                     let http_transport = Transport {
                         _type: TransportType::HttpPost,
@@ -485,6 +493,7 @@ impl MultiMintWallet {
                     vec![]
                 }
             }
+            Some("none") | None => vec![],
             _ => vec![],
         };
 
