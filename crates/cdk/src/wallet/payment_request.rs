@@ -20,7 +20,7 @@ use reqwest::Client;
 use crate::error::Error;
 use crate::nuts::nut11::{Conditions, SigFlag, SpendingConditions};
 use crate::nuts::nut18::Nut10SecretRequest;
-use crate::nuts::{CurrencyUnit, Transport};
+use crate::nuts::{CurrencyUnit, Token, Transport};
 #[cfg(feature = "nostr")]
 use crate::wallet::MultiMintReceiveOptions;
 use crate::wallet::{MultiMintWallet, SendOptions};
@@ -30,13 +30,15 @@ impl Wallet {
     /// Pay a NUT-18 PaymentRequest using a specific wallet.
     ///
     /// - If the request contains a Nostr or HttpPost transport, it will try those (preferring Nostr).
-    /// - If no usable transport is present, this returns an error.
+    /// - If no usable transport is present, returns the token without sending it.
     /// - If the request has no amount, a `custom_amount` must be provided.
+    ///
+    /// Returns the token that was created for the payment.
     pub async fn pay_request(
         &self,
         payment_request: PaymentRequest,
         custom_amount: Option<Amount>,
-    ) -> Result<(), Error> {
+    ) -> Result<Token, Error> {
         let amount = match payment_request.amount {
             Some(amount) => amount,
             None => match custom_amount {
@@ -139,7 +141,7 @@ impl Wallet {
                             );
                         }
 
-                        Ok(())
+                        Ok(token)
                     }
                     #[cfg(not(feature = "nostr"))]
                     Err(Error::Custom(
@@ -160,7 +162,7 @@ impl Wallet {
                     let status = res.status();
                     if status.is_success() {
                         println!("Successfully posted payment");
-                        Ok(())
+                        Ok(token)
                     } else {
                         let body = res.text().await.unwrap_or_default();
                         Err(Error::HttpError(Some(status.as_u16()), body))
@@ -168,10 +170,8 @@ impl Wallet {
                 }
             }
         } else {
-            // If no transport is available, return an error instead of printing the token
-            Err(Error::Custom(
-                "No transport available in payment request".to_string(),
-            ))
+            // If no transport is available, return the token without sending
+            Ok(token)
         }
     }
 }

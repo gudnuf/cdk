@@ -67,8 +67,16 @@ pub async fn pay_request(
         .first()
         .ok_or_else(|| anyhow!("No wallet found that can pay this request"))?;
 
-    matching_wallet
+    let token = matching_wallet
         .pay_request(payment_request.clone(), Some(amount))
         .await
-        .map_err(|e| anyhow!(e.to_string()))
+        .map_err(|e| anyhow!(e.to_string()))?;
+
+    // If no transport was available, print the token so the user can manually share it
+    if payment_request.transports.is_empty() {
+        println!("No transport available. Created token:");
+        println!("{}", token);
+    }
+
+    Ok(())
 }
